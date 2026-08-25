@@ -1,0 +1,15 @@
+[package]
+name = "fastchart-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+fastchart-audio = { path = "../audio" }
+fastchart-chart-core = { path = "../chart-core" }
+fastchart-clonehero = { path = "../clonehero" }
+fastchart-dsp = { path = "../dsp" }
+fastchart-music = { path = "../music" }

@@ -1,0 +1,10 @@
+{
+  "name": "fastchart-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "serve": "node serve.mjs",
+    "test:wasm": "node smoke-test.mjs"
+  }
+}

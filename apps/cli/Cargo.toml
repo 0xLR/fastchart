@@ -1,0 +1,15 @@
+[package]
+name = "fastchart"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fastchart-audio = { path = "../../crates/audio" }
+fastchart-dsp = { path = "../../crates/dsp" }
+fastchart-chart-core = { path = "../../crates/chart-core" }
+fastchart-clonehero = { path = "../../crates/clonehero" }
+fastchart-music = { path = "../../crates/music" }
+
+[lints]
+workspace = true

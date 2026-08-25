@@ -1,0 +1,12 @@
+[package]
+name = "fastchart-chart-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fastchart-music = { path = "../music" }
+
+[lints]
+workspace = true
+

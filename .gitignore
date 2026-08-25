@@ -1,0 +1,4 @@
+/target
+/fastchart-output
+/test_assets
+**/dist/

@@ -1,0 +1,12 @@
+[package]
+name = "fastchart-clonehero"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+fastchart-chart-core = { path = "../chart-core" }
+
+[lints]
+workspace = true
+

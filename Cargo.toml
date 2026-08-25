@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/audio",
+    "crates/dsp",
+    "crates/music",
+    "crates/chart-core",
+    "crates/clonehero",
+    "crates/wasm",
+    "apps/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
