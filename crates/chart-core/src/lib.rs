@@ -206,11 +206,30 @@ fn generate_pitched_difficulties(
         .get(pitches.len().saturating_mul(9) / 10)
         .copied()
         .unwrap_or(low_pitch.saturating_add(12));
-    let mut expert = Vec::new();
+    let mut expert: Vec<FiveLaneNote> = Vec::new();
+    let chord_events = if instrument == Instrument::Guitar {
+        let mut ranked: Vec<_> = (0..source.len()).collect();
+        ranked.sort_by(|left, right| {
+            source[*right]
+                .velocity
+                .total_cmp(&source[*left].velocity)
+                .then_with(|| {
+                    source[*right]
+                        .confidence
+                        .total_cmp(&source[*left].confidence)
+                })
+        });
+        ranked.truncate(source.len().div_ceil(9));
+        ranked
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+    } else {
+        std::collections::BTreeSet::new()
+    };
     let mut remembered_lanes = BTreeMap::<u8, u8>::new();
     let mut previous_lane = 2_u8;
     let mut previous_pitch = None;
-    for event in source {
+    for (event_index, event) in source.into_iter().enumerate() {
         let pitch = event.pitch.expect("filtered pitched event");
         let target = *remembered_lanes.entry(pitch).or_insert_with(|| {
             if high_pitch <= low_pitch {
@@ -230,7 +249,7 @@ fn generate_pitched_difficulties(
         let event_tick = analysis
             .tempo_map
             .seconds_to_ticks(event.start_seconds, RESOLUTION);
-        let tick = (phase_tick + quantize_tick(event_tick - phase_tick, RESOLUTION, 8)).max(0);
+        let tick = (phase_tick + quantize_pitched_tick(event_tick - phase_tick)).max(0);
         let end_tick = analysis
             .tempo_map
             .seconds_to_ticks(event.start_seconds + event.duration_seconds, RESOLUTION);
@@ -240,13 +259,9 @@ fn generate_pitched_difficulties(
         } else {
             0
         };
-        if let Some(existing) = expert
-            .last_mut()
-            .filter(|note: &&mut FiveLaneNote| note.tick == tick)
-        {
-            if sustain > existing.sustain {
-                existing.lane = lane;
-                existing.sustain = sustain;
+        if expert.last().is_some_and(|note| note.tick == tick) {
+            for existing in expert.iter_mut().rev().take_while(|note| note.tick == tick) {
+                existing.sustain = existing.sustain.max(sustain);
             }
         } else {
             expert.push(FiveLaneNote {
@@ -254,6 +269,13 @@ fn generate_pitched_difficulties(
                 lane,
                 sustain,
             });
+            if chord_events.contains(&event_index) {
+                expert.push(FiveLaneNote {
+                    tick,
+                    lane: if lane < 4 { lane + 1 } else { lane - 1 },
+                    sustain,
+                });
+            }
             previous_lane = lane;
             previous_pitch = Some(pitch);
         }
@@ -267,6 +289,14 @@ fn generate_pitched_difficulties(
     );
     tracks.insert(Difficulty::Easy, reduce_pitched(&expert, Difficulty::Easy));
     tracks
+}
+
+fn quantize_pitched_tick(tick: i64) -> i64 {
+    [8, 12]
+        .into_iter()
+        .map(|subdivision| quantize_tick(tick, RESOLUTION, subdivision))
+        .min_by_key(|candidate| (candidate - tick).abs())
+        .unwrap_or(tick)
 }
 
 fn reduce_pitched(expert: &[FiveLaneNote], difficulty: Difficulty) -> Vec<FiveLaneNote> {
@@ -283,16 +313,8 @@ fn reduce_pitched(expert: &[FiveLaneNote], difficulty: Difficulty) -> Vec<FiveLa
             continue;
         }
         let lane = match difficulty {
-            Difficulty::Easy => match note.lane {
-                0 | 1 => 1,
-                2 => 2,
-                _ => 3,
-            },
-            Difficulty::Medium => match note.lane {
-                0 => 1,
-                4 => 3,
-                lane => lane,
-            },
+            Difficulty::Easy => note.lane.min(2),
+            Difficulty::Medium => note.lane.min(3),
             _ => note.lane,
         };
         result.push(FiveLaneNote {
@@ -468,9 +490,75 @@ mod tests {
         };
         let chart = generate_full_chart(&analysis);
         let expert = &chart.guitar_tracks[&Difficulty::Expert];
-        assert_eq!(expert.len(), 20);
-        assert!(expert.windows(2).all(|pair| pair[0].lane <= pair[1].lane));
+        assert_eq!(
+            expert
+                .iter()
+                .map(|note| note.tick)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            20
+        );
         assert!(chart.guitar_tracks[&Difficulty::Easy].len() < expert.len());
         assert!(expert.iter().all(|note| note.lane <= 4));
+    }
+
+    #[test]
+    fn pitched_notes_snap_to_straight_and_triplet_grids() {
+        assert_eq!(quantize_pitched_tick(23), 24);
+        assert_eq!(quantize_pitched_tick(33), 32);
+    }
+
+    #[test]
+    fn strong_guitar_accents_become_expert_chords() {
+        let analysis = SongAnalysis {
+            duration_seconds: 1.0,
+            tempo_map: TempoMap::constant(120.0),
+            beat_offset_seconds: 0.0,
+            tracks: vec![InstrumentTrack {
+                instrument: Instrument::Guitar,
+                confidence: 1.0,
+                events: vec![MusicalEvent {
+                    start_seconds: 0.5,
+                    duration_seconds: 0.0,
+                    pitch: Some(60),
+                    velocity: 0.9,
+                    confidence: 0.9,
+                    percussion: None,
+                }],
+            }],
+        };
+        let chart = generate_full_chart(&analysis);
+        let expert = &chart.guitar_tracks[&Difficulty::Expert];
+        assert_eq!(expert.len(), 2);
+        assert_eq!(expert[0].tick, expert[1].tick);
+        assert_ne!(expert[0].lane, expert[1].lane);
+    }
+
+    #[test]
+    fn lower_pitched_difficulties_use_progressive_lane_counts() {
+        let expert: Vec<_> = (0..5)
+            .map(|lane| FiveLaneNote {
+                tick: i64::from(lane) * 300,
+                lane,
+                sustain: 0,
+            })
+            .collect();
+
+        let easy: Vec<_> = reduce_pitched(&expert, Difficulty::Easy)
+            .into_iter()
+            .map(|note| note.lane)
+            .collect();
+        let medium: Vec<_> = reduce_pitched(&expert, Difficulty::Medium)
+            .into_iter()
+            .map(|note| note.lane)
+            .collect();
+        let hard: Vec<_> = reduce_pitched(&expert, Difficulty::Hard)
+            .into_iter()
+            .map(|note| note.lane)
+            .collect();
+
+        assert_eq!(easy, vec![0, 1, 2, 2, 2]);
+        assert_eq!(medium, vec![0, 1, 2, 3, 3]);
+        assert_eq!(hard, vec![0, 1, 2, 3, 4]);
     }
 }

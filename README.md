@@ -35,7 +35,7 @@ cargo run -p fastchart -- evaluate "path/to/audio.wav" "path/to/notes.mid-or-cha
 Compare generated guitar or bass timing with an authored MIDI:
 
 ```powershell
-cargo run -p fastchart -- compare-pitched "generated/notes.chart" "reference/notes.mid" guitar
+cargo run -p fastchart -- compare-pitched "generated/notes.chart" "reference/notes.mid-or-chart" guitar
 ```
 
 Run the full test suite:
@@ -50,7 +50,9 @@ The reusable audio/DSP/chart crates do not invoke FFmpeg. The browser app decode
 
 The static browser app lives in `apps/web`. It runs analysis in a Web Worker,
 calls the Rust engine through WebAssembly, and packages `notes.chart`, `song.ini`,
-and the original audio into a Clone Hero-ready ZIP without uploading the song.
+and Clone Hero-compatible audio into a ready-to-play ZIP without uploading the
+song. MP3, OGG, OPUS, and WAV inputs are preserved; other decoded formats such
+as FLAC and M4A are converted locally to 16-bit PCM WAV.
 
 ```powershell
 cd apps/web

@@ -29,14 +29,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.first().is_some_and(|arg| arg == "compare-pitched") {
         let generated = args.get(1).ok_or(
-            "usage: fastchart compare-pitched <generated.chart> <notes.mid> <guitar|bass>",
+            "usage: fastchart compare-pitched <generated.chart> <notes.mid|notes.chart> <guitar|bass>",
         )?;
         let reference = args.get(2).ok_or(
-            "usage: fastchart compare-pitched <generated.chart> <notes.mid> <guitar|bass>",
+            "usage: fastchart compare-pitched <generated.chart> <notes.mid|notes.chart> <guitar|bass>",
         )?;
         let instrument = args
             .get(3)
-            .ok_or("usage: fastchart compare-pitched <generated.chart> <notes.mid> <guitar|bass>")?
+            .ok_or("usage: fastchart compare-pitched <generated.chart> <notes.mid|notes.chart> <guitar|bass>")?
             .to_string_lossy();
         compare_pitched_charts(Path::new(generated), Path::new(reference), &instrument)?;
         return Ok(());
@@ -136,7 +136,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         config,
     ));
     let chart = generate_full_chart(&analysis);
-    let extension = input.extension().and_then(OsStr::to_str).unwrap_or("ogg");
+    let extension = compatible_audio_extension(input);
     let audio_filename = format!("song.{extension}");
     let name = args
         .get(2)
@@ -168,7 +168,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         output.join("song.ini"),
         serialize_song_ini(&metadata, &chart),
     )?;
-    fs::copy(input, output.join(audio_filename))?;
+    copy_compatible_audio(input, &output, "song")?;
     let drum_events = analysis
         .tracks
         .iter()
@@ -217,14 +217,10 @@ fn compare_pitched_charts(
         _ => return Err("instrument must be guitar or bass".into()),
     };
     let generated_chart = summarize_chart(&fs::read_to_string(generated_path)?);
-    let midi = summarize_midi(&fs::read(reference_path)?)?;
     let generated_notes = generated_chart
         .notes
         .get(section)
         .ok_or_else(|| format!("generated chart has no {section} section"))?;
-    let reference_track = midi
-        .track(midi_track)
-        .ok_or_else(|| format!("reference MIDI has no {midi_track} track"))?;
 
     let mut generated_ticks = BTreeMap::<i64, u8>::new();
     for note in generated_notes.iter().filter(|note| note.lane <= 4) {
@@ -237,21 +233,7 @@ fn compare_pitched_charts(
             lanes,
         })
         .collect();
-    let mut reference_ticks = BTreeMap::<u64, u8>::new();
-    for note in reference_track
-        .notes
-        .iter()
-        .filter(|note| (96..=100).contains(&note.pitch))
-    {
-        *reference_ticks.entry(note.tick).or_default() |= 1 << (note.pitch - 96);
-    }
-    let reference: Vec<_> = reference_ticks
-        .into_iter()
-        .map(|(tick, lanes)| DrumEvent {
-            seconds: midi.tick_to_seconds(tick),
-            lanes,
-        })
-        .collect();
+    let reference = reference_pitched_events(reference_path, section, midi_track)?;
     let tolerance = 0.075;
     let matches = match_drum_events(&generated, &reference, tolerance);
     let precision = matches.len() as f64 / generated.len().max(1) as f64;
@@ -267,7 +249,90 @@ fn compare_pitched_charts(
         recall * 100.0,
         f1(precision, recall) * 100.0
     );
+    let lane_matches: u32 = matches
+        .iter()
+        .map(|(generated_index, reference_index)| {
+            (generated[*generated_index].lanes & reference[*reference_index].lanes).count_ones()
+        })
+        .sum();
+    let mut lane_confusion = [[0_u32; 5]; 5];
+    for (generated_index, reference_index) in &matches {
+        let generated_mask = generated[*generated_index].lanes;
+        let reference_mask = reference[*reference_index].lanes;
+        if generated_mask.count_ones() == 1 {
+            let generated_lane = generated_mask.trailing_zeros() as usize;
+            for (reference_lane, count) in lane_confusion[generated_lane].iter_mut().enumerate() {
+                if reference_mask & (1 << reference_lane) != 0 {
+                    *count += 1;
+                }
+            }
+        }
+    }
+    let generated_lanes: u32 = generated.iter().map(|event| event.lanes.count_ones()).sum();
+    let reference_lanes: u32 = reference.iter().map(|event| event.lanes.count_ones()).sum();
+    let lane_precision = f64::from(lane_matches) / f64::from(generated_lanes.max(1));
+    let lane_recall = f64::from(lane_matches) / f64::from(reference_lanes.max(1));
+    println!(
+        "lane-aware gems: precision {:.1}%, recall {:.1}%, F1 {:.1}%",
+        lane_precision * 100.0,
+        lane_recall * 100.0,
+        f1(lane_precision, lane_recall) * 100.0
+    );
+    println!("matched lane confusion (generated rows, authored columns):");
+    for row in lane_confusion {
+        println!("  {row:?}");
+    }
     Ok(())
+}
+
+fn reference_pitched_events(
+    path: &Path,
+    section: &str,
+    midi_track: &str,
+) -> Result<Vec<DrumEvent>, Box<dyn std::error::Error>> {
+    if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mid"))
+    {
+        let midi = summarize_midi(&fs::read(path)?)?;
+        let track = midi
+            .track(midi_track)
+            .ok_or_else(|| format!("reference MIDI has no {midi_track} track"))?;
+        let mut by_tick = BTreeMap::<u64, u8>::new();
+        for note in track
+            .notes
+            .iter()
+            .filter(|note| (96..=100).contains(&note.pitch))
+        {
+            *by_tick.entry(note.tick).or_default() |= 1 << (note.pitch - 96);
+        }
+        return Ok(by_tick
+            .into_iter()
+            .map(|(tick, lanes)| DrumEvent {
+                seconds: midi.tick_to_seconds(tick),
+                lanes,
+            })
+            .collect());
+    }
+
+    let chart = summarize_chart(&fs::read_to_string(path)?);
+    let mut by_tick = BTreeMap::<i64, u8>::new();
+    for note in chart
+        .notes
+        .get(section)
+        .ok_or_else(|| format!("reference chart has no {section} section"))?
+        .iter()
+        .filter(|note| note.lane <= 4)
+    {
+        *by_tick.entry(note.tick).or_default() |= 1 << note.lane;
+    }
+    Ok(by_tick
+        .into_iter()
+        .map(|(tick, lanes)| DrumEvent {
+            seconds: chart.tick_to_seconds(tick),
+            lanes,
+        })
+        .collect())
 }
 
 fn generate_from_stems(args: &[std::ffi::OsString]) -> Result<(), Box<dyn std::error::Error>> {
@@ -323,7 +388,7 @@ fn generate_from_stems(args: &[std::ffi::OsString]) -> Result<(), Box<dyn std::e
         .get(6)
         .map(|value| value.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Unknown Artist".into());
-    let backing_extension = extension_or(backing_path, "ogg");
+    let backing_extension = compatible_audio_extension(backing_path);
     let metadata = SongMetadata {
         name,
         artist,
@@ -374,9 +439,44 @@ fn extension_or<'a>(path: &'a Path, fallback: &'a str) -> &'a str {
 }
 
 fn copy_named(source: &Path, output: &Path, stem: &str) -> Result<(), io::Error> {
-    let extension = extension_or(source, "ogg");
-    fs::copy(source, output.join(format!("{stem}.{extension}")))?;
-    Ok(())
+    copy_compatible_audio(source, output, stem)
+}
+
+fn compatible_audio_extension(path: &Path) -> &str {
+    let extension = extension_or(path, "wav");
+    if matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "mp3" | "ogg" | "opus" | "wav"
+    ) {
+        extension
+    } else {
+        "wav"
+    }
+}
+
+fn copy_compatible_audio(source: &Path, output: &Path, stem: &str) -> Result<(), io::Error> {
+    let source_extension = extension_or(source, "wav");
+    let output_extension = compatible_audio_extension(source);
+    let destination = output.join(format!("{stem}.{output_extension}"));
+    if source_extension.eq_ignore_ascii_case(output_extension) {
+        fs::copy(source, destination)?;
+        return Ok(());
+    }
+    let result = Command::new("ffmpeg")
+        .args(["-y", "-v", "error", "-i"])
+        .arg(source)
+        .args(["-c:a", "pcm_s16le"])
+        .arg(&destination)
+        .output()?;
+    if result.status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "FFmpeg could not create {}: {}",
+            destination.display(),
+            String::from_utf8_lossy(&result.stderr)
+        )))
+    }
 }
 
 fn evaluate(audio_path: &Path, chart_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -564,7 +664,8 @@ fn decode_with_ffmpeg(
 
 #[cfg(test)]
 mod tests {
-    use super::{DrumEvent, match_drum_events};
+    use super::{DrumEvent, compatible_audio_extension, match_drum_events};
+    use std::path::Path;
 
     #[test]
     fn onset_matching_is_one_to_one() {
@@ -593,5 +694,12 @@ mod tests {
             },
         ];
         assert_eq!(match_drum_events(&generated, &reference, 0.05).len(), 2);
+    }
+
+    #[test]
+    fn unsupported_clone_hero_audio_uses_wav() {
+        assert_eq!(compatible_audio_extension(Path::new("song.flac")), "wav");
+        assert_eq!(compatible_audio_extension(Path::new("song.m4a")), "wav");
+        assert_eq!(compatible_audio_extension(Path::new("song.opus")), "opus");
     }
 }

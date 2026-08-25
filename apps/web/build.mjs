@@ -12,7 +12,7 @@ const cargo = spawnSync(
 );
 if (cargo.status !== 0) process.exit(cargo.status ?? 1);
 
-const assets = ["index.html", "styles.css", "app.js", "worker.js", "zip.js"];
+const assets = ["index.html", "styles.css", "app.js", "worker.js", "zip.js", "audio.js"];
 await mkdir(resolve(here, "pkg"), { recursive: true });
 await mkdir(resolve(here, "dist/pkg"), { recursive: true });
 await copyFile(

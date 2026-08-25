@@ -1,4 +1,10 @@
 import { makeZip } from "./zip.js";
+import {
+  audioExtension,
+  encodePcm16Wave,
+  isCloneHeroAudioExtension,
+  mixToMono,
+} from "./audio.js";
 
 const $ = (selector) => document.querySelector(selector);
 const dropZone = $("#drop-zone");
@@ -21,6 +27,7 @@ const progressDetail = $("#progress-detail");
 
 let selectedFile;
 let sourceAudio;
+let packagedAudioFilename;
 let generatedResult;
 let worker;
 let canceled = false;
@@ -92,6 +99,7 @@ function chooseFile(file) {
 function resetFile() {
   selectedFile = undefined;
   sourceAudio = undefined;
+  packagedAudioFilename = undefined;
   generatedResult = undefined;
   fileInput.value = "";
   dropZone.hidden = false;
@@ -121,23 +129,30 @@ async function generateChart() {
   formError.textContent = "";
 
   try {
-    sourceAudio = await selectedFile.arrayBuffer();
+    const originalAudio = await selectedFile.arrayBuffer();
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) throw new Error("This browser cannot decode audio files.");
     const context = new AudioContextClass();
     let audioBuffer;
     try {
-      audioBuffer = await context.decodeAudioData(sourceAudio.slice(0));
+      audioBuffer = await context.decodeAudioData(originalAudio.slice(0));
     } finally {
       await context.close();
     }
     if (canceled) return;
+    const extension = audioExtension(selectedFile.name);
+    if (isCloneHeroAudioExtension(extension)) {
+      sourceAudio = originalAudio;
+      packagedAudioFilename = `song.${extension}`;
+    } else {
+      sourceAudio = encodePcm16Wave(audioBuffer);
+      packagedAudioFilename = "song.wav";
+    }
     const mono = mixToMono(audioBuffer);
     setStage("analyze", 32);
     worker = new Worker("./worker.js", { type: "module" });
     worker.addEventListener("message", handleWorkerMessage);
     worker.addEventListener("error", () => failGeneration("The analysis worker stopped unexpectedly."));
-    const audioFilename = `song.${fileExtension(selectedFile.name)}`;
     worker.postMessage(
       {
         type: "generate",
@@ -145,7 +160,7 @@ async function generateChart() {
         sampleRate: audioBuffer.sampleRate,
         title: titleInput.value.trim() || titleFromFilename(selectedFile.name),
         artist: artistInput.value.trim() || "Unknown Artist",
-        audioFilename,
+        audioFilename: packagedAudioFilename,
         instrumentMask,
         difficultyMask,
       },
@@ -215,25 +230,13 @@ function setStage(stage, percent) {
   });
 }
 
-function mixToMono(audioBuffer) {
-  const mono = new Float32Array(audioBuffer.length);
-  for (let channel = 0; channel < audioBuffer.numberOfChannels; channel += 1) {
-    const input = audioBuffer.getChannelData(channel);
-    for (let index = 0; index < mono.length; index += 1) mono[index] += input[index];
-  }
-  const scale = 1 / audioBuffer.numberOfChannels;
-  for (let index = 0; index < mono.length; index += 1) mono[index] *= scale;
-  return mono;
-}
-
 async function downloadChart() {
-  if (!generatedResult || !sourceAudio || !selectedFile) return;
+  if (!generatedResult || !sourceAudio || !selectedFile || !packagedAudioFilename) return;
   const encoder = new TextEncoder();
-  const audioName = `song.${fileExtension(selectedFile.name)}`;
   const zip = makeZip([
     { name: "notes.chart", bytes: encoder.encode(generatedResult.chart) },
     { name: "song.ini", bytes: encoder.encode(generatedResult.ini) },
-    { name: audioName, bytes: new Uint8Array(sourceAudio) },
+    { name: packagedAudioFilename, bytes: new Uint8Array(sourceAudio) },
   ]);
   const url = URL.createObjectURL(zip);
   const link = document.createElement("a");
@@ -244,7 +247,6 @@ async function downloadChart() {
 }
 
 function checkboxMask(fieldset) { return [...fieldset.querySelectorAll("input:checked")].reduce((mask, input) => mask | Number(input.value), 0); }
-function fileExtension(name) { return name.split(".").pop().toLowerCase().replace(/[^a-z0-9]/g, "") || "wav"; }
 function titleFromFilename(name) { return name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim(); }
 function safeName(name) { return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "fastchart-song"; }
 function formatBytes(bytes) { return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(0)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`; }

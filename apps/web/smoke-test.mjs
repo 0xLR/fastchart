@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { makeZip } from "./zip.js";
+import { encodePcm16Wave, isCloneHeroAudioExtension } from "./audio.js";
 
 const wasmBytes = await readFile(new URL("./dist/pkg/fastchart.wasm", import.meta.url));
 const { instance } = await WebAssembly.instantiate(wasmBytes, {});
@@ -38,6 +39,23 @@ const zip = makeZip([
 const zipBytes = new Uint8Array(await zip.arrayBuffer());
 if (new DataView(zipBytes.buffer).getUint32(0, true) !== 0x04034b50) {
   throw new Error("ZIP packaging did not produce a valid local-file header.");
+}
+const wave = encodePcm16Wave({
+  numberOfChannels: 2,
+  length: 2,
+  sampleRate: 44_100,
+  getChannelData: (channel) =>
+    channel === 0 ? new Float32Array([0.5, -0.5]) : new Float32Array([-0.25, 0.25]),
+});
+const waveView = new DataView(wave);
+if (
+  waveView.getUint32(0, false) !== 0x52494646 ||
+  waveView.getUint32(8, false) !== 0x57415645 ||
+  waveView.getUint16(22, true) !== 2 ||
+  wave.byteLength !== 52 ||
+  isCloneHeroAudioExtension("flac")
+) {
+  throw new Error("Clone Hero WAV fallback did not produce a valid stereo PCM file.");
 }
 engine.fastchart_free_bytes(resultPointer, resultLength);
 engine.fastchart_free_f32(samples, length);

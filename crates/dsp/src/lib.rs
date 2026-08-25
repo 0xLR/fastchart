@@ -341,6 +341,7 @@ fn estimate_bpm(novelty: &[f32], sample_rate: u32, config: AnalysisConfig) -> f6
     let max_lag = ((frames_per_second * 60.0 / config.min_bpm) as usize).min(novelty.len() / 2);
     let mean = novelty.iter().sum::<f32>() / novelty.len() as f32;
     let mut best = (0.0_f64, 120.0_f64);
+    let mut candidates = Vec::with_capacity(max_lag.saturating_sub(min_lag) + 1);
     for lag in min_lag.max(1)..=max_lag.max(min_lag.max(1)) {
         let score: f64 = novelty[lag..]
             .iter()
@@ -349,11 +350,87 @@ fn estimate_bpm(novelty: &[f32], sample_rate: u32, config: AnalysisConfig) -> f6
             .sum();
         let bpm = frames_per_second * 60.0 / lag as f64;
         let weighted = score * (1.0 - ((bpm - 120.0).abs() / 500.0));
+        candidates.push((bpm, weighted));
         if weighted > best.0 {
             best = (weighted, bpm);
         }
     }
-    (best.1 * 10.0).round() / 10.0
+    let bpm = prefer_half_time(best, &candidates, novelty, frames_per_second, config);
+    (bpm * 10.0).round() / 10.0
+}
+
+fn prefer_half_time(
+    best: (f64, f64),
+    candidates: &[(f64, f64)],
+    novelty: &[f32],
+    frames_per_second: f64,
+    config: AnalysisConfig,
+) -> f64 {
+    let (_, best_bpm) = best;
+    let half_bpm = best_bpm / 2.0;
+    if best_bpm < 160.0 || half_bpm < config.min_bpm {
+        return best_bpm;
+    }
+    let half_band = (best_bpm * 0.47)..=(best_bpm * 0.53);
+    let Some((candidate_bpm, half_score)) = candidates
+        .iter()
+        .filter(|(bpm, _)| half_band.contains(bpm))
+        .max_by(|left, right| left.1.total_cmp(&right.1))
+        .copied()
+    else {
+        return best_bpm;
+    };
+    if half_score >= best.0 * 0.62
+        && alternating_accent_contrast(novelty, best_bpm, frames_per_second) >= 0.10
+    {
+        candidate_bpm
+    } else {
+        best_bpm
+    }
+}
+
+fn alternating_accent_contrast(novelty: &[f32], pulse_bpm: f64, frames_per_second: f64) -> f64 {
+    let window_length = (frames_per_second * 12.0).round().max(32.0) as usize;
+    let mut contrasts: Vec<_> = novelty
+        .chunks(window_length)
+        .filter(|window| window.len() >= window_length / 2)
+        .map(|window| accent_contrast_window(window, pulse_bpm, frames_per_second))
+        .collect();
+    if contrasts.is_empty() {
+        return 0.0;
+    }
+    contrasts.sort_by(f64::total_cmp);
+    contrasts[contrasts.len() / 2]
+}
+
+fn accent_contrast_window(novelty: &[f32], pulse_bpm: f64, frames_per_second: f64) -> f64 {
+    let period = (frames_per_second * 60.0 / pulse_bpm).round().max(1.0) as usize;
+    let Some(phase) = (0..period.min(novelty.len())).max_by(|left, right| {
+        (*left..novelty.len())
+            .step_by(period)
+            .map(|index| novelty[index])
+            .sum::<f32>()
+            .total_cmp(
+                &(*right..novelty.len())
+                    .step_by(period)
+                    .map(|index| novelty[index])
+                    .sum::<f32>(),
+            )
+    }) else {
+        return 0.0;
+    };
+    let mut sums = [0.0_f64; 2];
+    let mut counts = [0_usize; 2];
+    for (pulse, index) in (phase..novelty.len()).step_by(period).enumerate() {
+        let group = pulse % 2;
+        sums[group] += f64::from(novelty[index]);
+        counts[group] += 1;
+    }
+    let means = [
+        sums[0] / counts[0].max(1) as f64,
+        sums[1] / counts[1].max(1) as f64,
+    ];
+    (means[0] - means[1]).abs() / (means[0] + means[1] + f64::EPSILON)
 }
 
 fn estimate_tempo_map(
@@ -408,6 +485,7 @@ fn estimate_tempo_map(
         TempoMap::constant(global_bpm)
     } else {
         points[0].start_seconds = 0.0;
+        points[0].bpm = global_bpm;
         TempoMap { points }
     }
 }
@@ -601,6 +679,18 @@ mod tests {
         samples
     }
 
+    fn alternating_click_track(pulse_bpm: f64, seconds: usize, rate: u32) -> Vec<f32> {
+        let mut samples = vec![0.0; seconds * rate as usize];
+        let period = (60.0 / pulse_bpm * f64::from(rate)) as usize;
+        for (pulse, start) in (0..samples.len()).step_by(period).enumerate() {
+            let accent = if pulse % 2 == 0 { 1.0 } else { 0.42 };
+            for offset in 0..64.min(samples.len() - start) {
+                samples[start + offset] = accent * (1.0 - offset as f32 / 64.0);
+            }
+        }
+        samples
+    }
+
     #[test]
     fn estimates_click_track_tempo_and_events() {
         let analysis = analyze_mono(
@@ -614,6 +704,20 @@ mod tests {
             analysis.tempo_map.bpm()
         );
         assert!(analysis.tracks[0].events.len() >= 18);
+    }
+
+    #[test]
+    fn prefers_half_time_when_fast_pulses_have_alternating_accents() {
+        let analysis = analyze_mono(
+            &alternating_click_track(176.0, 16, 44_100),
+            44_100,
+            AnalysisConfig::default(),
+        );
+        assert!(
+            (analysis.tempo_map.bpm() - 88.0).abs() < 2.0,
+            "{}",
+            analysis.tempo_map.bpm()
+        );
     }
 
     #[test]
