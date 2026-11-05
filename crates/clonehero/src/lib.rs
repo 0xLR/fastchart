@@ -8,6 +8,7 @@ pub struct SongMetadata {
     pub name: String,
     pub artist: String,
     pub album: String,
+    pub album_track: String,
     pub genre: String,
     pub year: String,
     pub charter: String,
@@ -21,6 +22,7 @@ impl Default for SongMetadata {
             name: "Unknown Song".into(),
             artist: "Unknown Artist".into(),
             album: String::new(),
+            album_track: String::new(),
             genre: String::new(),
             year: String::new(),
             charter: "FastChart".into(),
@@ -131,6 +133,12 @@ pub fn serialize_song_ini(metadata: &SongMetadata, chart: &GeneratedChart) -> St
     }
     if !chart.bass_tracks.is_empty() {
         output.push_str("diff_bass = 1\n");
+    }
+    if !metadata.album_track.trim().is_empty() {
+        output.push_str(&format!(
+            "album_track = {}\n",
+            ini(metadata.album_track.trim())
+        ));
     }
     output
 }
@@ -489,6 +497,36 @@ mod tests {
         let summary = summarize_chart(&serialize_chart(&SongMetadata::default(), &chart));
         assert_eq!(summary.tempo_events, 2);
         assert_eq!(summary.tempos, vec![(0, 120_000), (384, 130_000)]);
+    }
+
+    #[test]
+    fn serializes_optional_song_metadata() {
+        let metadata = SongMetadata {
+            name: "September".into(),
+            artist: "Earth, Wind & Fire".into(),
+            album: "The Best of Earth, Wind & Fire, Vol. 1".into(),
+            album_track: "1".into(),
+            genre: "Funk".into(),
+            year: "1978".into(),
+            charter: "FastChart Tester".into(),
+            ..SongMetadata::default()
+        };
+        let chart = GeneratedChart {
+            resolution: 192,
+            bpm: 126.0,
+            tempo_points: Vec::new(),
+            tracks: BTreeMap::new(),
+            guitar_tracks: BTreeMap::new(),
+            bass_tracks: BTreeMap::new(),
+        };
+
+        let chart_text = serialize_chart(&metadata, &chart);
+        let ini_text = serialize_song_ini(&metadata, &chart);
+        assert!(chart_text.contains("Album = \"The Best of Earth, Wind & Fire, Vol. 1\""));
+        assert!(chart_text.contains("Year = \"1978\""));
+        assert!(ini_text.contains("genre = Funk"));
+        assert!(ini_text.contains("charter = FastChart Tester"));
+        assert!(ini_text.contains("album_track = 1"));
     }
 
     #[test]

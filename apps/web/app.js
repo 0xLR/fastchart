@@ -15,6 +15,14 @@ const fileSize = $("#file-size");
 const titleInput = $("#song-title");
 const artistInput = $("#song-artist");
 const songFields = $("#song-fields");
+const metadataPanel = $("#optional-metadata");
+const albumInput = $("#song-album");
+const genreInput = $("#song-genre");
+const yearInput = $("#song-year");
+const albumTrackInput = $("#album-track");
+const charterInput = $("#song-charter");
+const albumArtInput = $("#album-art");
+const backgroundArtInput = $("#background-art");
 const instruments = $("#instruments");
 const difficulties = $("#difficulties");
 const generateButton = $("#generate");
@@ -70,6 +78,9 @@ $("#start-over").addEventListener("click", () => {
 generateButton.addEventListener("click", generateChart);
 $("#cancel").addEventListener("click", cancelGeneration);
 $("#download").addEventListener("click", downloadChart);
+for (const input of [albumArtInput, backgroundArtInput]) {
+  input.addEventListener("change", () => validateArtwork(input));
+}
 
 function chooseFile(file) {
   if (!file) return;
@@ -89,6 +100,7 @@ function chooseFile(file) {
   dropZone.hidden = true;
   fileCard.hidden = false;
   songFields.hidden = false;
+  metadataPanel.hidden = false;
   instruments.disabled = false;
   difficulties.disabled = false;
   generateButton.disabled = false;
@@ -105,6 +117,15 @@ function resetFile() {
   dropZone.hidden = false;
   fileCard.hidden = true;
   songFields.hidden = true;
+  metadataPanel.hidden = true;
+  metadataPanel.open = false;
+  albumInput.value = "";
+  genreInput.value = "";
+  yearInput.value = "";
+  albumTrackInput.value = "";
+  charterInput.value = "FastChart";
+  albumArtInput.value = "";
+  backgroundArtInput.value = "";
   instruments.disabled = true;
   difficulties.disabled = true;
   generateButton.disabled = true;
@@ -119,6 +140,13 @@ async function generateChart() {
     formError.textContent = "Select at least one instrument and one difficulty.";
     return;
   }
+  const invalidMetadata = [yearInput, albumTrackInput].find((input) => !input.checkValidity());
+  if (invalidMetadata) {
+    invalidMetadata.reportValidity();
+    formError.textContent = "Check the optional year and album track values.";
+    return;
+  }
+  if (!validateArtwork(albumArtInput) || !validateArtwork(backgroundArtInput)) return;
   canceled = false;
   generatedResult = undefined;
   resultPanel.hidden = true;
@@ -160,6 +188,11 @@ async function generateChart() {
         sampleRate: audioBuffer.sampleRate,
         title: titleInput.value.trim() || titleFromFilename(selectedFile.name),
         artist: artistInput.value.trim() || "Unknown Artist",
+        album: albumInput.value.trim(),
+        genre: genreInput.value.trim(),
+        year: yearInput.value.trim(),
+        charter: charterInput.value.trim() || "FastChart",
+        albumTrack: albumTrackInput.value.trim(),
         audioFilename: packagedAudioFilename,
         instrumentMask,
         difficultyMask,
@@ -232,18 +265,60 @@ function setStage(stage, percent) {
 
 async function downloadChart() {
   if (!generatedResult || !sourceAudio || !selectedFile || !packagedAudioFilename) return;
+  const downloadButton = $("#download");
+  downloadButton.disabled = true;
   const encoder = new TextEncoder();
-  const zip = makeZip([
-    { name: "notes.chart", bytes: encoder.encode(generatedResult.chart) },
-    { name: "song.ini", bytes: encoder.encode(generatedResult.ini) },
-    { name: packagedAudioFilename, bytes: new Uint8Array(sourceAudio) },
-  ]);
-  const url = URL.createObjectURL(zip);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `${safeName(titleInput.value || "fastchart-song")}.zip`;
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  try {
+    const files = [
+      { name: "notes.chart", bytes: encoder.encode(generatedResult.chart) },
+      { name: "song.ini", bytes: encoder.encode(generatedResult.ini) },
+      { name: packagedAudioFilename, bytes: new Uint8Array(sourceAudio) },
+    ];
+    for (const [input, basename] of [
+      [albumArtInput, "album"],
+      [backgroundArtInput, "background"],
+    ]) {
+      const file = input.files[0];
+      if (file) {
+        files.push({
+          name: `${basename}.${imageExtension(file)}`,
+          bytes: new Uint8Array(await file.arrayBuffer()),
+        });
+      }
+    }
+    const zip = makeZip(files);
+    const url = URL.createObjectURL(zip);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${safeName(titleInput.value || "fastchart-song")}.zip`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  } catch {
+    formError.textContent = "The artwork could not be added to the ZIP. Try choosing it again.";
+  } finally {
+    downloadButton.disabled = false;
+  }
+}
+
+function validateArtwork(input) {
+  const file = input.files[0];
+  if (!file) return true;
+  if (!/\.(png|jpe?g)$/i.test(file.name) || !["image/png", "image/jpeg", ""].includes(file.type)) {
+    input.value = "";
+    formError.textContent = "Artwork must be a PNG or JPG file.";
+    return false;
+  }
+  if (file.size > 15 * 1024 * 1024) {
+    input.value = "";
+    formError.textContent = "Choose artwork smaller than 15 MB.";
+    return false;
+  }
+  formError.textContent = "";
+  return true;
+}
+
+function imageExtension(file) {
+  return /\.png$/i.test(file.name) ? "png" : "jpg";
 }
 
 function checkboxMask(fieldset) { return [...fieldset.querySelectorAll("input:checked")].reduce((mask, input) => mask | Number(input.value), 0); }

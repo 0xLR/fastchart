@@ -37,6 +37,11 @@ self.addEventListener("message", async ({ data }) => {
     samples = null;
     const title = writeString(engine, data.title);
     const artist = writeString(engine, data.artist);
+    const album = writeString(engine, data.album);
+    const genre = writeString(engine, data.genre);
+    const year = writeString(engine, data.year);
+    const charter = writeString(engine, data.charter);
+    const albumTrack = writeString(engine, data.albumTrack);
     const audio = writeString(engine, data.audioFilename);
     let resultPointer;
     try {
@@ -48,6 +53,16 @@ self.addEventListener("message", async ({ data }) => {
         title.length,
         artist.pointer,
         artist.length,
+        album.pointer,
+        album.length,
+        genre.pointer,
+        genre.length,
+        year.pointer,
+        year.length,
+        charter.pointer,
+        charter.length,
+        albumTrack.pointer,
+        albumTrack.length,
         audio.pointer,
         audio.length,
         data.instrumentMask,
@@ -65,6 +80,11 @@ self.addEventListener("message", async ({ data }) => {
       engine.fastchart_free_f32(samplesPointer, samplesLength);
       releaseString(engine, title);
       releaseString(engine, artist);
+      releaseString(engine, album);
+      releaseString(engine, genre);
+      releaseString(engine, year);
+      releaseString(engine, charter);
+      releaseString(engine, albumTrack);
       releaseString(engine, audio);
     }
   } catch (error) {

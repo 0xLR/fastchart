@@ -1,4 +1,13 @@
-# FastChart
+<h1 align="center">FastChart</h1>
+
+<p align="center">
+  Generate drum, guitar, and bass charts for Clone Hero from any song.<br>
+  Free, and it runs in your browser, not a server.
+</p>
+
+<p align="center">
+  <img src="fastchart.png" alt="">
+</p>
 
 FastChart is an experimental, local-first Clone Hero chart generator. The current Rust MVP uses FFT spectral flux to estimate tempo changes and classify percussion transients, creates four drum difficulties, and writes a Clone Hero song folder.
 

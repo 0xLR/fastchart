@@ -206,6 +206,29 @@ fn generate_pitched_difficulties(
         .get(pitches.len().saturating_mul(9) / 10)
         .copied()
         .unwrap_or(low_pitch.saturating_add(12));
+    let event_ticks: Vec<_> = source
+        .iter()
+        .map(|event| {
+            let event_tick = analysis
+                .tempo_map
+                .seconds_to_ticks(event.start_seconds, RESOLUTION);
+            (phase_tick + quantize_pitched_tick(event_tick - phase_tick)).max(0)
+        })
+        .collect();
+    let event_pitches: Vec<_> = source.iter().filter_map(|event| event.pitch).collect();
+    let mut optimized_lanes = optimize_pitch_lanes(
+        &event_pitches,
+        &event_ticks,
+        low_pitch,
+        high_pitch,
+        instrument,
+    );
+    stabilize_repeated_riff_lanes(
+        &event_pitches,
+        &event_ticks,
+        &mut optimized_lanes,
+        instrument,
+    );
     let mut expert: Vec<FiveLaneNote> = Vec::new();
     let chord_events = if instrument == Instrument::Guitar {
         let mut ranked: Vec<_> = (0..source.len()).collect();
@@ -219,37 +242,19 @@ fn generate_pitched_difficulties(
                         .total_cmp(&source[*left].confidence)
                 })
         });
-        ranked.truncate(source.len().div_ceil(9));
+        ranked.truncate(source.len().div_ceil(4));
         ranked
             .into_iter()
             .collect::<std::collections::BTreeSet<_>>()
     } else {
         std::collections::BTreeSet::new()
     };
-    let mut remembered_lanes = BTreeMap::<u8, u8>::new();
-    let mut previous_lane = 2_u8;
-    let mut previous_pitch = None;
     for (event_index, event) in source.into_iter().enumerate() {
-        let pitch = event.pitch.expect("filtered pitched event");
-        let target = *remembered_lanes.entry(pitch).or_insert_with(|| {
-            if high_pitch <= low_pitch {
-                2
-            } else {
-                (((pitch.saturating_sub(low_pitch)) as f32 / f32::from(high_pitch - low_pitch)
-                    * 4.0)
-                    .round() as i16)
-                    .clamp(0, 4) as u8
-            }
-        });
-        let lane = if previous_pitch == Some(pitch) {
-            previous_lane
-        } else {
-            target.clamp(previous_lane.saturating_sub(2), (previous_lane + 2).min(4))
-        };
+        let lane = optimized_lanes[event_index];
         let event_tick = analysis
             .tempo_map
             .seconds_to_ticks(event.start_seconds, RESOLUTION);
-        let tick = (phase_tick + quantize_pitched_tick(event_tick - phase_tick)).max(0);
+        let tick = event_ticks[event_index];
         let end_tick = analysis
             .tempo_map
             .seconds_to_ticks(event.start_seconds + event.duration_seconds, RESOLUTION);
@@ -276,8 +281,6 @@ fn generate_pitched_difficulties(
                     sustain,
                 });
             }
-            previous_lane = lane;
-            previous_pitch = Some(pitch);
         }
     }
     let mut tracks = BTreeMap::new();
@@ -289,6 +292,304 @@ fn generate_pitched_difficulties(
     );
     tracks.insert(Difficulty::Easy, reduce_pitched(&expert, Difficulty::Easy));
     tracks
+}
+
+fn optimize_pitch_lanes(
+    pitches: &[u8],
+    ticks: &[i64],
+    low_pitch: u8,
+    high_pitch: u8,
+    instrument: Instrument,
+) -> Vec<u8> {
+    if pitches.is_empty() {
+        return Vec::new();
+    }
+    debug_assert_eq!(pitches.len(), ticks.len());
+    // Guitar's greedy path is already a useful playability constraint. Optimize
+    // around it instead of letting a single noisy pitch redraw an entire phrase.
+    let targets = if instrument == Instrument::Guitar {
+        greedy_pitch_lane_targets(pitches, ticks, low_pitch, high_pitch)
+    } else {
+        pitches
+            .iter()
+            .map(|pitch| pitch_target_lane(*pitch, low_pitch, high_pitch))
+            .collect()
+    };
+    let mut costs = [0.0_f32; 5];
+    let mut previous_lanes = vec![[0_u8; 5]; pitches.len()];
+    for lane in 0..5_u8 {
+        costs[usize::from(lane)] = lane_emission_cost(lane, targets[0], instrument);
+    }
+    for index in 1..pitches.len() {
+        let mut next_costs = [f32::INFINITY; 5];
+        for lane in 0..5_u8 {
+            for previous_lane in 0..5_u8 {
+                let cost = costs[usize::from(previous_lane)]
+                    + lane_emission_cost(lane, targets[index], instrument)
+                    + lane_transition_cost(
+                        previous_lane,
+                        lane,
+                        pitches[index - 1],
+                        pitches[index],
+                        ticks[index - 1],
+                        ticks[index],
+                        low_pitch,
+                        high_pitch,
+                        instrument,
+                    );
+                if cost < next_costs[usize::from(lane)] {
+                    next_costs[usize::from(lane)] = cost;
+                    previous_lanes[index][usize::from(lane)] = previous_lane;
+                }
+            }
+        }
+        costs = next_costs;
+    }
+    let mut lane = (0..5_u8)
+        .min_by(|left, right| costs[usize::from(*left)].total_cmp(&costs[usize::from(*right)]))
+        .unwrap_or(2);
+    let mut result = vec![0_u8; pitches.len()];
+    for index in (0..pitches.len()).rev() {
+        result[index] = lane;
+        lane = previous_lanes[index][usize::from(lane)];
+    }
+    result
+}
+
+const RIFF_ONSETS: usize = 6;
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct RiffSignature {
+    starting_pitch: Option<u8>,
+    pitch_intervals: Vec<i16>,
+    tick_intervals: Vec<i64>,
+}
+
+fn stabilize_repeated_riff_lanes(
+    pitches: &[u8],
+    ticks: &[i64],
+    lanes: &mut [u8],
+    instrument: Instrument,
+) -> usize {
+    debug_assert_eq!(pitches.len(), ticks.len());
+    debug_assert_eq!(pitches.len(), lanes.len());
+    let onset_indices: Vec<_> = (0..ticks.len())
+        .filter(|index| *index == 0 || ticks[*index] != ticks[*index - 1])
+        .collect();
+    if onset_indices.len() < RIFF_ONSETS * 2 {
+        return 0;
+    }
+    let mut first_occurrences: BTreeMap<RiffSignature, usize> = BTreeMap::new();
+    let mut changed = 0;
+    for start in 0..=onset_indices.len() - RIFF_ONSETS {
+        let window = &onset_indices[start..start + RIFF_ONSETS];
+        let raw_pitch_intervals: Vec<_> = window
+            .windows(2)
+            .map(|pair| i16::from(pitches[pair[1]]) - i16::from(pitches[pair[0]]))
+            .collect();
+        let pitch_intervals = if instrument == Instrument::Guitar {
+            raw_pitch_intervals
+        } else {
+            raw_pitch_intervals
+                .into_iter()
+                .map(pitch_interval_class)
+                .collect()
+        };
+        let tick_intervals: Vec<_> = window
+            .windows(2)
+            .map(|pair| ticks[pair[1]] - ticks[pair[0]])
+            .collect();
+        if tick_intervals
+            .iter()
+            .any(|gap| *gap <= 0 || *gap > i64::from(RESOLUTION) * 2)
+            || !informative_riff(&pitch_intervals)
+        {
+            continue;
+        }
+        let starting_pitch = (instrument == Instrument::Guitar).then_some(pitches[window[0]]);
+        let signature = RiffSignature {
+            starting_pitch,
+            pitch_intervals,
+            tick_intervals,
+        };
+        let Some(&canonical_start) = first_occurrences.get(&signature) else {
+            first_occurrences.insert(signature, start);
+            continue;
+        };
+        if start < canonical_start + RIFF_ONSETS {
+            continue;
+        }
+        let canonical = &onset_indices[canonical_start..canonical_start + RIFF_ONSETS];
+        let candidate: Vec<_> = canonical.iter().map(|index| lanes[*index]).collect();
+        let deviation: usize = window
+            .iter()
+            .zip(&candidate)
+            .map(|(index, lane)| usize::from(lanes[*index].abs_diff(*lane)))
+            .sum();
+        if deviation > RIFF_ONSETS
+            || !riff_boundaries_are_playable(&onset_indices, start, &candidate, ticks, lanes)
+        {
+            continue;
+        }
+        for (index, lane) in window.iter().zip(candidate) {
+            if lanes[*index] != lane {
+                lanes[*index] = lane;
+                changed += 1;
+            }
+        }
+    }
+    changed
+}
+
+fn pitch_interval_class(interval: i16) -> i16 {
+    match interval {
+        ..=-6 => -3,
+        -5..=-3 => -2,
+        -2..=-1 => -1,
+        0 => 0,
+        1..=2 => 1,
+        3..=5 => 2,
+        6.. => 3,
+    }
+}
+
+fn informative_riff(pitch_intervals: &[i16]) -> bool {
+    let moving = pitch_intervals
+        .iter()
+        .filter(|interval| **interval != 0)
+        .count();
+    let mut distinct = pitch_intervals.to_vec();
+    distinct.sort_unstable();
+    distinct.dedup();
+    moving >= 3 && distinct.len() >= 2
+}
+
+fn riff_boundaries_are_playable(
+    onset_indices: &[usize],
+    start: usize,
+    candidate: &[u8],
+    ticks: &[i64],
+    lanes: &[u8],
+) -> bool {
+    let first = onset_indices[start];
+    if start > 0 {
+        let previous = onset_indices[start - 1];
+        if ticks[first] - ticks[previous] <= i64::from(RESOLUTION) * 2
+            && lanes[previous].abs_diff(candidate[0]) > 2
+        {
+            return false;
+        }
+    }
+    let after = start + RIFF_ONSETS;
+    if after < onset_indices.len() {
+        let last = onset_indices[after - 1];
+        let next = onset_indices[after];
+        if ticks[next] - ticks[last] <= i64::from(RESOLUTION) * 2
+            && candidate[RIFF_ONSETS - 1].abs_diff(lanes[next]) > 2
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn greedy_pitch_lane_targets(
+    pitches: &[u8],
+    ticks: &[i64],
+    low_pitch: u8,
+    high_pitch: u8,
+) -> Vec<u8> {
+    let mut lanes = Vec::with_capacity(pitches.len());
+    let mut previous_lane = 2_u8;
+    let mut previous_pitch = None;
+    let mut previous_tick = None;
+    for (index, pitch) in pitches.iter().copied().enumerate() {
+        let target = pitch_target_lane(pitch, low_pitch, high_pitch);
+        let lane = if previous_pitch == Some(pitch) {
+            previous_lane
+        } else {
+            target.clamp(previous_lane.saturating_sub(2), (previous_lane + 2).min(4))
+        };
+        lanes.push(lane);
+        if previous_tick != Some(ticks[index]) {
+            previous_lane = lane;
+            previous_pitch = Some(pitch);
+            previous_tick = Some(ticks[index]);
+        }
+    }
+    lanes
+}
+
+fn pitch_target_lane(pitch: u8, low_pitch: u8, high_pitch: u8) -> u8 {
+    if high_pitch <= low_pitch {
+        return 2;
+    }
+    ((f32::from(pitch.saturating_sub(low_pitch)) / f32::from(high_pitch - low_pitch) * 4.0).round()
+        as i16)
+        .clamp(0, 4) as u8
+}
+
+fn lane_emission_cost(lane: u8, target: u8, instrument: Instrument) -> f32 {
+    let weight = if instrument == Instrument::Guitar {
+        1.8
+    } else {
+        0.9
+    };
+    f32::from(lane.abs_diff(target)) * weight
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lane_transition_cost(
+    previous_lane: u8,
+    lane: u8,
+    previous_pitch: u8,
+    pitch: u8,
+    previous_tick: i64,
+    tick: i64,
+    low_pitch: u8,
+    high_pitch: u8,
+    instrument: Instrument,
+) -> f32 {
+    if tick - previous_tick > i64::from(RESOLUTION) * 2 {
+        return 0.0;
+    }
+    let lane_change = i16::from(lane) - i16::from(previous_lane);
+    let pitch_change = i16::from(pitch) - i16::from(previous_pitch);
+    let lane_distance = lane.abs_diff(previous_lane);
+    if pitch_change == 0 {
+        return f32::from(lane_distance) * 3.5;
+    }
+    let mut cost = 0.0;
+    if lane_change == 0 {
+        cost += if instrument == Instrument::Bass {
+            0.15
+        } else {
+            0.3
+        };
+    } else if lane_change.signum() != pitch_change.signum() {
+        cost += if instrument == Instrument::Guitar {
+            1.5 + f32::from(lane_distance) * 0.5
+        } else {
+            3.0 + f32::from(lane_distance)
+        };
+    }
+    if lane_distance > 2 {
+        cost += f32::from(lane_distance - 2)
+            * if instrument == Instrument::Bass {
+                3.5
+            } else {
+                2.5
+            };
+    }
+    let pitch_span = i16::from(high_pitch.saturating_sub(low_pitch)).max(4);
+    let expected_distance =
+        ((pitch_change.unsigned_abs() as f32 * 4.0 / pitch_span as f32).round() as u8).clamp(1, 2);
+    let contour_weight = if instrument == Instrument::Guitar {
+        0.2
+    } else {
+        0.35
+    };
+    cost + f32::from(lane_distance.abs_diff(expected_distance)) * contour_weight
 }
 
 fn quantize_pitched_tick(tick: i64) -> i64 {
@@ -532,6 +833,96 @@ mod tests {
         assert_eq!(expert.len(), 2);
         assert_eq!(expert[0].tick, expert[1].tick);
         assert_ne!(expert[0].lane, expert[1].lane);
+    }
+
+    #[test]
+    fn guitar_chords_are_limited_to_strongest_quarter_of_onsets() {
+        let events = (0..8)
+            .map(|index| MusicalEvent {
+                start_seconds: index as f64 * 0.5,
+                duration_seconds: 0.0,
+                pitch: Some(52 + index),
+                velocity: 0.2 + index as f32 * 0.1,
+                confidence: 0.9,
+                percussion: None,
+            })
+            .collect();
+        let analysis = SongAnalysis {
+            duration_seconds: 4.0,
+            tempo_map: TempoMap::constant(120.0),
+            beat_offset_seconds: 0.0,
+            tracks: vec![InstrumentTrack {
+                instrument: Instrument::Guitar,
+                confidence: 1.0,
+                events,
+            }],
+        };
+        let expert = &generate_full_chart(&analysis).guitar_tracks[&Difficulty::Expert];
+        assert_eq!(expert.len(), 10);
+        let chord_onsets = expert
+            .windows(2)
+            .filter(|notes| notes[0].tick == notes[1].tick)
+            .count();
+        assert_eq!(chord_onsets, 2);
+    }
+
+    #[test]
+    fn pitch_lane_optimizer_preserves_repetition_and_melodic_direction() {
+        let pitches = [60, 60, 62, 64, 65, 67];
+        let ticks = [0, 96, 192, 288, 384, 480];
+        let lanes = optimize_pitch_lanes(&pitches, &ticks, 60, 67, Instrument::Guitar);
+
+        assert_eq!(lanes[0], lanes[1]);
+        assert!(lanes.windows(2).all(|pair| pair[1] >= pair[0]));
+        assert!(lanes.windows(2).all(|pair| pair[0].abs_diff(pair[1]) <= 2));
+        assert!(lanes.last() > lanes.first());
+    }
+
+    #[test]
+    fn pitch_lane_optimizer_suppresses_an_isolated_octave_jump() {
+        let pitches = [60, 61, 73, 62, 63];
+        let ticks = [0, 96, 192, 288, 384];
+        let lanes = optimize_pitch_lanes(&pitches, &ticks, 60, 73, Instrument::Guitar);
+
+        assert!(lanes[1].abs_diff(lanes[2]) <= 2);
+        assert!(lanes[2].abs_diff(lanes[3]) <= 2);
+    }
+
+    #[test]
+    fn repeated_riffs_reuse_the_first_lane_pattern() {
+        let pitches = [60, 62, 64, 62, 65, 67, 72, 74, 76, 74, 77, 79];
+        let ticks = [0, 96, 192, 288, 384, 480, 960, 1056, 1152, 1248, 1344, 1440];
+        let mut lanes = [0, 1, 2, 1, 2, 3, 1, 2, 3, 2, 3, 4];
+
+        let changed = stabilize_repeated_riff_lanes(&pitches, &ticks, &mut lanes, Instrument::Bass);
+
+        assert_eq!(changed, 6);
+        assert_eq!(&lanes[..6], &lanes[6..]);
+    }
+
+    #[test]
+    fn repeated_single_notes_are_not_mistaken_for_riffs() {
+        let pitches = [60; 12];
+        let ticks: Vec<_> = (0..12).map(|index| index * 96).collect();
+        let mut lanes = [1, 1, 1, 1, 1, 1, 3, 3, 3, 3, 3, 3];
+
+        let changed =
+            stabilize_repeated_riff_lanes(&pitches, &ticks, &mut lanes, Instrument::Guitar);
+
+        assert_eq!(changed, 0);
+        assert_eq!(&lanes[6..], &[3; 6]);
+    }
+
+    #[test]
+    fn guitar_riffs_require_the_same_pitch_register() {
+        let pitches = [60, 62, 64, 62, 65, 67, 72, 74, 76, 74, 77, 79];
+        let ticks = [0, 96, 192, 288, 384, 480, 960, 1056, 1152, 1248, 1344, 1440];
+        let mut lanes = [0, 1, 2, 1, 2, 3, 1, 2, 3, 2, 3, 4];
+
+        let changed =
+            stabilize_repeated_riff_lanes(&pitches, &ticks, &mut lanes, Instrument::Guitar);
+
+        assert_eq!(changed, 0);
     }
 
     #[test]

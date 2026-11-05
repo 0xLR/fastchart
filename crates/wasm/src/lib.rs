@@ -81,6 +81,16 @@ pub unsafe extern "C" fn fastchart_generate(
     title_length: usize,
     artist_pointer: *const u8,
     artist_length: usize,
+    album_pointer: *const u8,
+    album_length: usize,
+    genre_pointer: *const u8,
+    genre_length: usize,
+    year_pointer: *const u8,
+    year_length: usize,
+    charter_pointer: *const u8,
+    charter_length: usize,
+    album_track_pointer: *const u8,
+    album_track_length: usize,
     audio_pointer: *const u8,
     audio_length: usize,
     instrument_mask: u32,
@@ -94,13 +104,27 @@ pub unsafe extern "C" fn fastchart_generate(
         let samples = unsafe { std::slice::from_raw_parts(samples_pointer, samples_length) };
         let title = read_string(title_pointer, title_length, "Unknown Song");
         let artist = read_string(artist_pointer, artist_length, "Unknown Artist");
+        let album = read_string(album_pointer, album_length, "");
+        let genre = read_string(genre_pointer, genre_length, "");
+        let year = read_string(year_pointer, year_length, "");
+        let charter = read_string(charter_pointer, charter_length, "FastChart");
+        let album_track = read_string(album_track_pointer, album_track_length, "");
         let audio_filename = read_string(audio_pointer, audio_length, "song.wav");
+        let metadata = SongMetadata {
+            name: title,
+            artist,
+            album,
+            album_track,
+            genre,
+            year,
+            charter,
+            audio_filename,
+            song_length_ms: 0,
+        };
         generate_json(
             samples,
             sample_rate,
-            &title,
-            &artist,
-            &audio_filename,
+            metadata,
             instrument_mask,
             difficulty_mask,
         )
@@ -124,9 +148,7 @@ fn read_string(pointer: *const u8, length: usize, fallback: &str) -> String {
 fn generate_json(
     input_samples: &[f32],
     sample_rate: u32,
-    title: &str,
-    artist: &str,
-    audio_filename: &str,
+    mut metadata: SongMetadata,
     instrument_mask: u32,
     difficulty_mask: u32,
 ) -> String {
@@ -162,13 +184,7 @@ fn generate_json(
     }
     let mut chart = generate_full_chart(&analysis);
     filter_chart(&mut chart, instrument_mask, difficulty_mask);
-    let metadata = SongMetadata {
-        name: title.to_owned(),
-        artist: artist.to_owned(),
-        audio_filename: audio_filename.to_owned(),
-        song_length_ms: (analysis.duration_seconds * 1000.0).round() as u64,
-        ..SongMetadata::default()
-    };
+    metadata.song_length_ms = (analysis.duration_seconds * 1000.0).round() as u64;
     let chart_text = serialize_chart(&metadata, &chart);
     let ini_text = serialize_song_ini(&metadata, &chart);
     let drum_notes = note_count(&chart.tracks);
@@ -256,18 +272,38 @@ mod tests {
             44_100,
             "A \"title\"",
             "An artist",
+            "An album",
+            "Rock",
+            "2026",
+            "A charter",
+            "3",
             "song.wav",
             DRUMS | GUITAR | BASS,
             ALL_DIFFICULTIES,
         );
         assert!(response.starts_with("{\"chart\":"));
         assert!(response.contains("A \\\"title\\\""));
+        assert!(response.contains("album = An album"));
+        assert!(response.contains("album_track = 3"));
         assert!(response.contains("\"tempoRegions\":"));
     }
 
     #[test]
     fn instrument_filter_removes_unselected_sections() {
-        let response = generate_json(&[0.0; 2_205], 44_100, "Song", "Artist", "song.wav", BASS, 8);
+        let response = generate_json(
+            &[0.0; 2_205],
+            44_100,
+            "Song",
+            "Artist",
+            "",
+            "",
+            "",
+            "FastChart",
+            "",
+            "song.wav",
+            BASS,
+            8,
+        );
         assert!(!response.contains("ExpertDrums"));
         assert!(!response.contains("ExpertSingle"));
         assert!(response.contains("ExpertDoubleBass"));

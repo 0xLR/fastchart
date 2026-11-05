@@ -103,11 +103,11 @@ pub fn analyze_pitched_mono(
         _ => (55.0, 1_000.0),
     };
     let features = frame_features(samples, sample_rate, config);
-    let novelty = novelty_curve(&features);
+    let novelty = pitched_novelty_curve(&features, instrument);
     let mut threshold = adaptive_threshold(&novelty);
     if instrument == Instrument::Guitar {
         for value in &mut threshold {
-            *value *= 0.65;
+            *value *= 0.66;
         }
     }
     let mut events = Vec::new();
@@ -214,29 +214,89 @@ fn estimate_pitch(
         .collect();
     let mut scores = Vec::with_capacity(maximum_bin.saturating_sub(minimum_bin) + 1);
     for bin in minimum_bin..=maximum_bin.min(frame_size / 2) {
-        let mut score = magnitudes[bin];
-        for (harmonic, weight) in [(2_usize, 0.7_f32), (3, 0.45), (4, 0.3)] {
-            if bin * harmonic < magnitudes.len() {
-                score += magnitudes[bin * harmonic] * weight;
-            }
-        }
-        scores.push((score, bin));
+        scores.push((harmonic_score(&magnitudes, bin), bin));
     }
     scores.sort_by(|left, right| right.0.total_cmp(&left.0));
     let (best_score, best_bin) = *scores.first()?;
     if best_score <= 1e-6 {
         return None;
     }
+    let selected_bin = correct_octave_bin(
+        best_bin,
+        best_score,
+        &magnitudes,
+        minimum_bin,
+        maximum_bin.min(frame_size / 2),
+    );
+    let selected_score = harmonic_score(&magnitudes, selected_bin);
     let second_score = scores
         .iter()
-        .find(|(_, bin)| bin.abs_diff(best_bin) > 1)
+        .find(|(_, bin)| bin.abs_diff(selected_bin) > 1)
         .map_or(0.0, |(score, _)| *score);
-    let frequency = best_bin as f32 * bin_hz;
+    let frequency = selected_bin as f32 * bin_hz;
     let midi = (69.0 + 12.0 * (frequency / 440.0).log2())
         .round()
         .clamp(0.0, 127.0) as u8;
-    let confidence = (best_score / (best_score + second_score + 1e-9)).clamp(0.0, 1.0);
+    let confidence = (selected_score / (selected_score + second_score + 1e-9)).clamp(0.0, 1.0);
     Some((midi, confidence))
+}
+
+fn harmonic_score(magnitudes: &[f32], bin: usize) -> f32 {
+    let mut score = magnitudes.get(bin).copied().unwrap_or(0.0);
+    for (harmonic, weight) in [(2_usize, 0.7_f32), (3, 0.45), (4, 0.3)] {
+        if let Some(magnitude) = magnitudes.get(bin * harmonic) {
+            score += magnitude * weight;
+        }
+    }
+    score
+}
+
+fn correct_octave_bin(
+    best_bin: usize,
+    best_score: f32,
+    magnitudes: &[f32],
+    minimum_bin: usize,
+    maximum_bin: usize,
+) -> usize {
+    let half = best_bin / 2;
+    let candidate_start = half.saturating_sub(1).max(minimum_bin);
+    let candidate_end = half.saturating_add(1).min(maximum_bin);
+    if candidate_start > candidate_end {
+        return best_bin;
+    }
+    let candidate = (candidate_start..=candidate_end)
+        .max_by(|left, right| {
+            harmonic_score(magnitudes, *left).total_cmp(&harmonic_score(magnitudes, *right))
+        })
+        .unwrap_or(best_bin);
+    if candidate >= best_bin || candidate < minimum_bin {
+        return best_bin;
+    }
+    let fundamental = neighborhood_peak(magnitudes, candidate);
+    let second = neighborhood_peak(magnitudes, candidate * 2);
+    let third = neighborhood_peak(magnitudes, candidate * 3);
+    let fourth = neighborhood_peak(magnitudes, candidate * 4);
+    let independent_third = third >= second * 0.18;
+    let additional_support = fourth >= second * 0.08 || fundamental >= second * 0.08;
+    let candidate_score = harmonic_score(magnitudes, candidate);
+    if independent_third && additional_support && candidate_score >= best_score * 0.78 {
+        candidate
+    } else {
+        best_bin
+    }
+}
+
+fn neighborhood_peak(magnitudes: &[f32], center: usize) -> f32 {
+    let start = center.saturating_sub(1);
+    let end = center
+        .saturating_add(1)
+        .min(magnitudes.len().saturating_sub(1));
+    magnitudes
+        .get(start..=end)
+        .unwrap_or_default()
+        .iter()
+        .copied()
+        .fold(0.0, f32::max)
 }
 
 fn frame_features(samples: &[f32], sample_rate: u32, config: AnalysisConfig) -> Vec<FrameFeatures> {
@@ -315,6 +375,27 @@ fn frame_features(samples: &[f32], sample_rate: u32, config: AnalysisConfig) -> 
 
 fn novelty_curve(features: &[FrameFeatures]) -> Vec<f32> {
     features.iter().map(|feature| feature.flux).collect()
+}
+
+fn pitched_novelty_curve(features: &[FrameFeatures], instrument: Instrument) -> Vec<f32> {
+    features
+        .iter()
+        .map(|feature| {
+            let band_total = feature.low_flux + feature.mid_flux + feature.high_flux;
+            if band_total <= 1e-9 {
+                return 0.0;
+            }
+            let focused_share = match instrument {
+                Instrument::Bass => (feature.low_flux + feature.mid_flux * 0.3) / band_total,
+                Instrument::Guitar => {
+                    (feature.low_flux * 0.45 + feature.mid_flux + feature.high_flux * 0.15)
+                        / band_total
+                }
+                _ => 1.0,
+            };
+            feature.flux * (0.35 + 0.65 * focused_share)
+        })
+        .collect()
 }
 
 fn adaptive_threshold(novelty: &[f32]) -> Vec<f32> {
@@ -741,6 +822,54 @@ mod tests {
         gate_drum_entry(&mut events);
         assert_eq!(events.len(), 3);
         assert_eq!(events[0].start_seconds, 10.0);
+    }
+
+    #[test]
+    fn pitched_novelty_emphasizes_instrument_frequency_bands() {
+        let low = FrameFeatures {
+            flux: 1.0,
+            low_flux: 1.0,
+            ..FrameFeatures::default()
+        };
+        let mid = FrameFeatures {
+            flux: 1.0,
+            mid_flux: 1.0,
+            ..FrameFeatures::default()
+        };
+        let high = FrameFeatures {
+            flux: 1.0,
+            high_flux: 1.0,
+            ..FrameFeatures::default()
+        };
+        let guitar = pitched_novelty_curve(&[low, mid, high], Instrument::Guitar);
+        assert!(guitar[1] > guitar[0]);
+        assert!(guitar[0] > guitar[2]);
+        let bass = pitched_novelty_curve(&[low, mid, high], Instrument::Bass);
+        assert!(bass[0] > bass[1]);
+        assert!(bass[1] > bass[2]);
+    }
+
+    #[test]
+    fn octave_correction_requires_multiple_lower_fundamental_harmonics() {
+        let mut missing_fundamental = vec![0.0_f32; 130];
+        missing_fundamental[40] = 1.0;
+        missing_fundamental[60] = 0.55;
+        missing_fundamental[80] = 0.3;
+        let best_score = harmonic_score(&missing_fundamental, 40);
+        assert_eq!(
+            correct_octave_bin(40, best_score, &missing_fundamental, 5, 100),
+            20
+        );
+
+        let mut true_fundamental = vec![0.0_f32; 130];
+        true_fundamental[40] = 1.0;
+        true_fundamental[80] = 0.5;
+        true_fundamental[120] = 0.3;
+        let best_score = harmonic_score(&true_fundamental, 40);
+        assert_eq!(
+            correct_octave_bin(40, best_score, &true_fundamental, 5, 100),
+            40
+        );
     }
 
     #[test]

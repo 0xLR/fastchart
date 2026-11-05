@@ -16,7 +16,6 @@
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
         <span>FastChart</span>
       </a>
-      <span class="privacy-pill"><span aria-hidden="true">●</span> Runs on your device</span>
     </header>
 
     <main>
@@ -60,6 +59,33 @@
             <label>Song title<input id="song-title" type="text" autocomplete="off" /></label>
             <label>Artist<input id="song-artist" type="text" autocomplete="off" placeholder="Unknown Artist" /></label>
           </div>
+
+          <details id="optional-metadata" class="metadata-panel" hidden>
+            <summary>
+              <span>Optional song details</span>
+              <small>Metadata &amp; artwork</small>
+            </summary>
+            <div class="metadata-grid">
+              <label>Album<input id="song-album" type="text" autocomplete="off" /></label>
+              <label>Genre<input id="song-genre" type="text" autocomplete="off" placeholder="Rock, Funk, Metal…" /></label>
+              <label>Year<input id="song-year" type="number" inputmode="numeric" min="1000" max="9999" placeholder="2026" /></label>
+              <label>Album track #<input id="album-track" type="number" inputmode="numeric" min="1" max="999" placeholder="1" /></label>
+              <label class="wide-field">Charter<input id="song-charter" type="text" autocomplete="off" value="FastChart" /></label>
+            </div>
+            <div class="image-fields">
+              <label>
+                <span>Album / track art</span>
+                <input id="album-art" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" />
+                <small>Optional PNG or JPG, exported as <code>album.*</code></small>
+              </label>
+              <label>
+                <span>Background image</span>
+                <input id="background-art" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" />
+                <small>Optional PNG or JPG, exported as <code>background.*</code></small>
+              </label>
+            </div>
+            <p class="metadata-note">Artwork is packaged locally with your chart and never uploaded.</p>
+          </details>
 
           <fieldset id="instruments" class="options" disabled>
             <legend>Instruments</legend>
@@ -119,7 +145,7 @@
       </section>
     </main>
 
-    <footer><span>FastChart MVP</span><span>Audio never leaves your browser.</span></footer>
+    <footer><span>FastChart</span><span>Audio never leaves your browser.</span></footer>
     <script>
       if (window.location.protocol === "file:") {
         document.querySelector("#form-error").textContent =
