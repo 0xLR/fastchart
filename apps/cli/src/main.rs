@@ -1,9 +1,11 @@
-use fastchart_audio::normalize;
+use fastchart_audio::{normalize, normalize_with_companion};
 use fastchart_chart_core::{Difficulty, generate_drum_chart, generate_full_chart};
 use fastchart_clonehero::{
     SongMetadata, serialize_chart, serialize_song_ini, summarize_chart, summarize_midi,
 };
-use fastchart_dsp::{AnalysisConfig, analyze_mono, analyze_pitched_mono};
+use fastchart_dsp::{
+    AnalysisConfig, analyze_mono, analyze_pitched_mono, analyze_pitched_mono_with_guide,
+};
 use fastchart_music::Instrument;
 use std::{
     collections::BTreeMap,
@@ -115,16 +117,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let output = args
         .get(1)
         .map_or_else(|| PathBuf::from("fastchart-output"), PathBuf::from);
-    let mut samples = decode_with_ffmpeg(input, 44_100)?;
-    normalize(&mut samples);
+    let (mut samples, mut guitar_guide) = decode_mono_and_guitar_guide(input, 44_100)?;
+    normalize_with_companion(&mut samples, &mut guitar_guide);
     println!(
         "Analyzing {:.1} seconds of audio...",
         samples.len() as f64 / 44_100.0
     );
     let config = AnalysisConfig::default();
     let mut analysis = analyze_mono(&samples, 44_100, config);
-    analysis.tracks.push(analyze_pitched_mono(
+    analysis.tracks.push(analyze_pitched_mono_with_guide(
         &samples,
+        &guitar_guide,
         44_100,
         Instrument::Guitar,
         config,
@@ -627,6 +630,41 @@ fn decode_with_ffmpeg(
     path: &Path,
     sample_rate: u32,
 ) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    decode_with_ffmpeg_channels(path, sample_rate, 1)
+}
+
+fn decode_mono_and_guitar_guide(
+    path: &Path,
+    sample_rate: u32,
+) -> Result<(Vec<f32>, Vec<f32>), Box<dyn std::error::Error>> {
+    let stereo = decode_with_ffmpeg_channels(path, sample_rate, 2)?;
+    Ok(stereo_to_mono_and_guitar_guide(&stereo))
+}
+
+fn stereo_to_mono_and_guitar_guide(stereo: &[f32]) -> (Vec<f32>, Vec<f32>) {
+    let mut mono = Vec::with_capacity(stereo.len() / 2);
+    let mut guide = Vec::with_capacity(stereo.len() / 2);
+    let mut mono_energy = 0.0_f64;
+    let mut guide_energy = 0.0_f64;
+    for frame in stereo.chunks_exact(2) {
+        let center = (frame[0] + frame[1]) * 0.5;
+        let side = (frame[0] - frame[1]) * 0.5;
+        mono.push(center);
+        guide.push(side);
+        mono_energy += f64::from(center * center);
+        guide_energy += f64::from(side * side);
+    }
+    if guide_energy <= mono_energy * 0.0001 {
+        guide.clone_from(&mono);
+    }
+    (mono, guide)
+}
+
+fn decode_with_ffmpeg_channels(
+    path: &Path,
+    sample_rate: u32,
+    channels: u8,
+) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
     let output = Command::new("ffmpeg")
         .args(["-v", "error", "-i"])
         .arg(path)
@@ -636,7 +674,7 @@ fn decode_with_ffmpeg(
             "-acodec",
             "pcm_f32le",
             "-ac",
-            "1",
+            &channels.to_string(),
             "-ar",
             &sample_rate.to_string(),
             "pipe:1",
@@ -664,7 +702,9 @@ fn decode_with_ffmpeg(
 
 #[cfg(test)]
 mod tests {
-    use super::{DrumEvent, compatible_audio_extension, match_drum_events};
+    use super::{
+        DrumEvent, compatible_audio_extension, match_drum_events, stereo_to_mono_and_guitar_guide,
+    };
     use std::path::Path;
 
     #[test]
@@ -701,5 +741,13 @@ mod tests {
         assert_eq!(compatible_audio_extension(Path::new("song.flac")), "wav");
         assert_eq!(compatible_audio_extension(Path::new("song.m4a")), "wav");
         assert_eq!(compatible_audio_extension(Path::new("song.opus")), "opus");
+    }
+
+    #[test]
+    fn centered_audio_is_removed_from_guitar_guide_when_side_energy_exists() {
+        let (mono, guide) =
+            stereo_to_mono_and_guitar_guide(&[0.5, 0.5, -0.5, -0.5, 0.75, 0.25, -0.75, -0.25]);
+        assert_eq!(mono, [0.5, -0.5, 0.5, -0.5]);
+        assert_eq!(guide, [0.0, 0.0, 0.25, -0.25]);
     }
 }

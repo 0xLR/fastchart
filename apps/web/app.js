@@ -2,6 +2,7 @@ import { makeZip } from "./zip.js";
 import {
   audioExtension,
   encodePcm16Wave,
+  guitarOnsetGuide,
   isCloneHeroAudioExtension,
   mixToMono,
 } from "./audio.js";
@@ -177,6 +178,7 @@ async function generateChart() {
       packagedAudioFilename = "song.wav";
     }
     const mono = mixToMono(audioBuffer);
+    const guitarGuide = guitarOnsetGuide(audioBuffer, mono);
     setStage("analyze", 32);
     worker = new Worker("./worker.js", { type: "module" });
     worker.addEventListener("message", handleWorkerMessage);
@@ -185,6 +187,7 @@ async function generateChart() {
       {
         type: "generate",
         samples: mono.buffer,
+        guitarGuide: guitarGuide.buffer,
         sampleRate: audioBuffer.sampleRate,
         title: titleInput.value.trim() || titleFromFilename(selectedFile.name),
         artist: artistInput.value.trim() || "Unknown Artist",
@@ -197,7 +200,7 @@ async function generateChart() {
         instrumentMask,
         difficultyMask,
       },
-      [mono.buffer],
+      [mono.buffer, guitarGuide.buffer],
     );
   } catch (error) {
     failGeneration(error?.message || "The selected audio could not be decoded.");

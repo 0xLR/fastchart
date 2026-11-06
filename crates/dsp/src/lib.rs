@@ -31,6 +31,7 @@ struct FrameFeatures {
     high_flux: f32,
     spectral_flatness: f32,
     centroid_hz: f32,
+    rms: f32,
 }
 
 pub fn analyze_mono(samples: &[f32], sample_rate: u32, config: AnalysisConfig) -> SongAnalysis {
@@ -90,6 +91,20 @@ pub fn analyze_pitched_mono(
     instrument: Instrument,
     config: AnalysisConfig,
 ) -> InstrumentTrack {
+    analyze_pitched_mono_with_guide(samples, samples, sample_rate, instrument, config)
+}
+
+/// Detects pitched attacks while using a second signal to decide when attacks
+/// occurred. Pitch still comes from `samples`; the guide can therefore be a
+/// center-cancelled stereo signal that rejects centered vocals without losing
+/// the pitch information present in the full mix.
+pub fn analyze_pitched_mono_with_guide(
+    samples: &[f32],
+    onset_guide: &[f32],
+    sample_rate: u32,
+    instrument: Instrument,
+    config: AnalysisConfig,
+) -> InstrumentTrack {
     if samples.is_empty() || sample_rate == 0 {
         return InstrumentTrack {
             instrument,
@@ -102,8 +117,21 @@ pub fn analyze_pitched_mono(
         Instrument::Guitar => (65.0, 1_300.0),
         _ => (55.0, 1_000.0),
     };
-    let features = frame_features(samples, sample_rate, config);
-    let novelty = pitched_novelty_curve(&features, instrument);
+    let guide = if onset_guide.len() == samples.len() {
+        onset_guide
+    } else {
+        samples
+    };
+    let features = frame_features(guide, sample_rate, config);
+    let mut novelty = pitched_novelty_curve(&features, instrument);
+    if !std::ptr::eq(guide.as_ptr(), samples.as_ptr()) {
+        let mix_features = frame_features(samples, sample_rate, config);
+        for ((value, guide_feature), mix_feature) in
+            novelty.iter_mut().zip(&features).zip(&mix_features)
+        {
+            *value *= stereo_side_gate(guide_feature.rms, mix_feature.rms);
+        }
+    }
     let mut threshold = adaptive_threshold(&novelty);
     if instrument == Instrument::Guitar {
         for value in &mut threshold {
@@ -318,11 +346,18 @@ fn frame_features(samples: &[f32], sample_rate: u32, config: AnalysisConfig) -> 
     let mut result = Vec::with_capacity((samples.len() - frame_size) / config.hop_size.max(1) + 1);
     for start in (0..=samples.len() - frame_size).step_by(config.hop_size.max(1)) {
         for index in 0..frame_size {
+            let sample = samples[start + index];
             spectrum[index] = Complex {
-                re: samples[start + index] * window[index],
+                re: sample * window[index],
                 im: 0.0,
             };
         }
+        let rms = (samples[start..start + frame_size]
+            .iter()
+            .map(|sample| sample * sample)
+            .sum::<f32>()
+            / frame_size as f32)
+            .sqrt();
         fft_in_place(&mut spectrum);
         let mut magnitude_sum = 0.0_f32;
         let mut weighted_frequency = 0.0_f32;
@@ -368,9 +403,20 @@ fn frame_features(samples: &[f32], sample_rate: u32, config: AnalysisConfig) -> 
             high_flux,
             spectral_flatness: (geometric_mean / (arithmetic_mean + 1e-12)).clamp(0.0, 1.0),
             centroid_hz: weighted_frequency / (magnitude_sum + 1e-12),
+            rms,
         });
     }
     result
+}
+
+fn stereo_side_gate(side_rms: f32, mix_rms: f32) -> f32 {
+    if mix_rms <= 1e-7 {
+        return 0.0;
+    }
+    // Below 6% side-to-mix energy is commonly centered-source leakage. A
+    // clearly wide attack (22% or more) receives full weight, with a smooth
+    // transition so moderately panned guitars are not cut abruptly.
+    ((side_rms / mix_rms - 0.06) / 0.16).clamp(0.0, 1.0)
 }
 
 fn novelty_curve(features: &[FrameFeatures]) -> Vec<f32> {
@@ -896,6 +942,45 @@ mod tests {
                 .pitch
                 .is_some_and(|pitch| i16::from(pitch).abs_diff(45) <= 2)
         }));
+    }
+
+    #[test]
+    fn quiet_stereo_leakage_rejects_pitched_events_from_the_full_mix() {
+        let sample_rate = 44_100_u32;
+        let mut samples = vec![0.0_f32; sample_rate as usize * 4];
+        for half_second in 1..7 {
+            let start = half_second * sample_rate as usize / 2;
+            for offset in 0..(sample_rate as usize / 5) {
+                samples[start + offset] =
+                    (2.0 * std::f32::consts::PI * 220.0 * offset as f32 / sample_rate as f32).sin()
+                        * 0.8;
+            }
+        }
+        let wide_guide: Vec<_> = samples.iter().map(|sample| sample * 0.4).collect();
+        let audible = analyze_pitched_mono_with_guide(
+            &samples,
+            &wide_guide,
+            sample_rate,
+            Instrument::Guitar,
+            AnalysisConfig::default(),
+        );
+        let quiet_leakage: Vec<_> = samples.iter().map(|sample| sample * 0.03).collect();
+        let rejected = analyze_pitched_mono_with_guide(
+            &samples,
+            &quiet_leakage,
+            sample_rate,
+            Instrument::Guitar,
+            AnalysisConfig::default(),
+        );
+        assert!(!audible.events.is_empty());
+        assert!(rejected.events.is_empty());
+    }
+
+    #[test]
+    fn stereo_side_gate_fades_from_leakage_to_wide_audio() {
+        assert_eq!(stereo_side_gate(0.03, 1.0), 0.0);
+        assert!((stereo_side_gate(0.14, 1.0) - 0.5).abs() < 1e-6);
+        assert_eq!(stereo_side_gate(0.3, 1.0), 1.0);
     }
 
     #[test]

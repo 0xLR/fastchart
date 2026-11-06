@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { makeZip } from "./zip.js";
-import { encodePcm16Wave, isCloneHeroAudioExtension } from "./audio.js";
+import { encodePcm16Wave, guitarOnsetGuide, isCloneHeroAudioExtension } from "./audio.js";
 
 const wasmBytes = await readFile(new URL("./dist/pkg/fastchart.wasm", import.meta.url));
 const { instance } = await WebAssembly.instantiate(wasmBytes, {});
@@ -17,6 +17,7 @@ function allocateString(value) {
 
 const length = 4_410;
 const samples = engine.fastchart_alloc_f32(length);
+const guitarGuide = engine.fastchart_alloc_f32(length);
 const title = allocateString("Browser Smoke Test");
 const artist = allocateString("FastChart");
 const album = allocateString("Test Album");
@@ -26,7 +27,7 @@ const charter = allocateString("FastChart Smoke Test");
 const albumTrack = allocateString("2");
 const audio = allocateString("song.wav");
 const resultPointer = engine.fastchart_generate(
-  samples, length, 44_100,
+  samples, length, guitarGuide, length, 44_100,
   title.pointer, title.length,
   artist.pointer, artist.length,
   album.pointer, album.length,
@@ -66,18 +67,35 @@ const wave = encodePcm16Wave({
   getChannelData: (channel) =>
     channel === 0 ? new Float32Array([0.5, -0.5]) : new Float32Array([-0.25, 0.25]),
 });
+const centeredThenPannedMono = new Float32Array([0.5, -0.5, 0.5, -0.5]);
+const sideGuide = guitarOnsetGuide(
+  {
+    numberOfChannels: 2,
+    length: 4,
+    getChannelData: (channel) =>
+      channel === 0
+        ? new Float32Array([0.5, -0.5, 0.75, -0.75])
+        : new Float32Array([0.5, -0.5, 0.25, -0.25]),
+  },
+  centeredThenPannedMono,
+);
 const waveView = new DataView(wave);
 if (
   waveView.getUint32(0, false) !== 0x52494646 ||
   waveView.getUint32(8, false) !== 0x57415645 ||
   waveView.getUint16(22, true) !== 2 ||
   wave.byteLength !== 52 ||
-  isCloneHeroAudioExtension("flac")
+  isCloneHeroAudioExtension("flac") ||
+  sideGuide[0] !== 0 ||
+  sideGuide[1] !== 0 ||
+  sideGuide[2] !== 0.25 ||
+  sideGuide[3] !== -0.25
 ) {
   throw new Error("Clone Hero WAV fallback did not produce a valid stereo PCM file.");
 }
 engine.fastchart_free_bytes(resultPointer, resultLength);
 engine.fastchart_free_f32(samples, length);
+engine.fastchart_free_f32(guitarGuide, length);
 for (const allocation of [title, artist, album, genre, year, charter, albumTrack, audio]) {
   engine.fastchart_free_bytes(allocation.pointer, allocation.length);
 }

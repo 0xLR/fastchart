@@ -3,10 +3,12 @@
 //! The exported allocation functions form a deliberately small ABI so the static
 //! web app can load the module without a JavaScript package manager or bindgen.
 
-use fastchart_audio::normalize;
+use fastchart_audio::normalize_with_companion;
 use fastchart_chart_core::{Difficulty, GeneratedChart, generate_full_chart};
 use fastchart_clonehero::{SongMetadata, serialize_chart, serialize_song_ini};
-use fastchart_dsp::{AnalysisConfig, analyze_mono, analyze_pitched_mono};
+use fastchart_dsp::{
+    AnalysisConfig, analyze_mono, analyze_pitched_mono, analyze_pitched_mono_with_guide,
+};
 use fastchart_music::Instrument;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -76,6 +78,8 @@ pub extern "C" fn fastchart_result_length() -> usize {
 pub unsafe extern "C" fn fastchart_generate(
     samples_pointer: *const f32,
     samples_length: usize,
+    guitar_guide_pointer: *const f32,
+    guitar_guide_length: usize,
     sample_rate: u32,
     title_pointer: *const u8,
     title_length: usize,
@@ -102,6 +106,12 @@ pub unsafe extern "C" fn fastchart_generate(
         // SAFETY: JavaScript writes these allocations before invoking this function and
         // keeps them alive until it returns.
         let samples = unsafe { std::slice::from_raw_parts(samples_pointer, samples_length) };
+        let guitar_guide = if guitar_guide_pointer.is_null() || guitar_guide_length == 0 {
+            samples
+        } else {
+            // SAFETY: JavaScript keeps this allocation alive until the call returns.
+            unsafe { std::slice::from_raw_parts(guitar_guide_pointer, guitar_guide_length) }
+        };
         let title = read_string(title_pointer, title_length, "Unknown Song");
         let artist = read_string(artist_pointer, artist_length, "Unknown Artist");
         let album = read_string(album_pointer, album_length, "");
@@ -123,6 +133,7 @@ pub unsafe extern "C" fn fastchart_generate(
         };
         generate_json(
             samples,
+            guitar_guide,
             sample_rate,
             metadata,
             instrument_mask,
@@ -147,6 +158,7 @@ fn read_string(pointer: *const u8, length: usize, fallback: &str) -> String {
 
 fn generate_json(
     input_samples: &[f32],
+    input_guitar_guide: &[f32],
     sample_rate: u32,
     mut metadata: SongMetadata,
     instrument_mask: u32,
@@ -163,12 +175,14 @@ fn generate_json(
         difficulty_mask
     };
     let mut samples = input_samples.to_vec();
-    normalize(&mut samples);
+    let mut guitar_guide = input_guitar_guide.to_vec();
+    normalize_with_companion(&mut samples, &mut guitar_guide);
     let config = AnalysisConfig::default();
     let mut analysis = analyze_mono(&samples, sample_rate, config);
     if instrument_mask & GUITAR != 0 {
-        analysis.tracks.push(analyze_pitched_mono(
+        analysis.tracks.push(analyze_pitched_mono_with_guide(
             &samples,
+            &guitar_guide,
             sample_rate,
             Instrument::Guitar,
             config,
@@ -269,15 +283,19 @@ mod tests {
         let samples = vec![0.0; 4_410];
         let response = generate_json(
             &samples,
+            &samples,
             44_100,
-            "A \"title\"",
-            "An artist",
-            "An album",
-            "Rock",
-            "2026",
-            "A charter",
-            "3",
-            "song.wav",
+            SongMetadata {
+                name: "A \"title\"".into(),
+                artist: "An artist".into(),
+                album: "An album".into(),
+                genre: "Rock".into(),
+                year: "2026".into(),
+                charter: "A charter".into(),
+                album_track: "3".into(),
+                audio_filename: "song.wav".into(),
+                song_length_ms: 0,
+            },
             DRUMS | GUITAR | BASS,
             ALL_DIFFICULTIES,
         );
@@ -292,15 +310,14 @@ mod tests {
     fn instrument_filter_removes_unselected_sections() {
         let response = generate_json(
             &[0.0; 2_205],
+            &[0.0; 2_205],
             44_100,
-            "Song",
-            "Artist",
-            "",
-            "",
-            "",
-            "FastChart",
-            "",
-            "song.wav",
+            SongMetadata {
+                name: "Song".into(),
+                artist: "Artist".into(),
+                audio_filename: "song.wav".into(),
+                ..SongMetadata::default()
+            },
             BASS,
             8,
         );
