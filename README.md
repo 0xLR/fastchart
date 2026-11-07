@@ -1,4 +1,6 @@
-<h1 align="center">FastChart</h1>
+<p align="center">
+  <img src="assets/fastchart-readme-header.png" alt="FastChart" width="1200">
+</p>
 
 <p align="center">
   Generate drum, guitar, and bass charts for Clone Hero from any song.<br>
@@ -9,9 +11,74 @@
   <img src="fastchart.png" alt="">
 </p>
 
-FastChart is an experimental, local-first Clone Hero chart generator. The current Rust MVP uses FFT spectral flux to estimate tempo changes and classify percussion transients, creates four drum difficulties, and writes a Clone Hero song folder.
+## Pipeline
 
-Pitched stem analysis can also generate playable five-lane guitar and bass abstractions with sustains and four derived difficulties.
+FastChart is split into a small browser shell and a Rust analysis engine. The
+browser handles files and audio formats; Rust does the number-heavy work of
+finding musical events and turning them into a chart. Everything runs on your
+machine, so the song never has to be uploaded to a server.
+
+### 1. Decode the song
+
+The browser opens the selected file with the Web Audio API and turns it into
+floating-point PCM samples, a plain stream of numbers representing the waveform.
+Formats Clone Hero already understands, such as MP3, OGG, OPUS, and
+WAV, are kept for the final download. Other decodable formats are converted to
+a standard 16-bit WAV locally.
+
+FastChart averages the channels into a normalized mono signal for the main
+analysis. For guitar timing, it also builds a lightweight side-channel guide by
+subtracting the right channel from the left. Centered sounds such as lead vocals
+are often reduced in that signal, while panned or doubled guitars remain. The
+guide only answers *when did an attack happen?*; pitch still comes from the full
+mix so useful musical information is not thrown away.
+
+### 2. Listen for musical structure
+
+The prepared samples are handed to a Web Worker, which keeps the page responsive
+while the Rust engine runs through WebAssembly. Rust examines the song in short,
+overlapping windows using an FFT. Rather than treating the FFT as a mysterious
+“AI guess,” FastChart looks for practical cues: sudden changes in frequency
+energy, repeating pulses, and stable pitched content.
+
+Those cues become a tempo map and a collection of candidate events. Percussive
+events are classified using where their energy sits in the spectrum. Guitar and
+bass use instrument-focused frequency bands, onset strength, estimated pitch,
+confidence, and duration. The current browser build is conventional DSP, so there
+is no model download and no cloud inference.
+
+### 3. Turn detections into something playable
+
+Raw detections are rarely fun as-is. FastChart aligns them to the estimated beat
+grid, removes implausibly dense hits, and maps them onto Clone Hero lanes. For
+guitar and bass it considers the surrounding pitch contour instead of assigning
+each color independently, which helps phrases move naturally across the five
+frets. It can also preserve sustains, form chords, and keep repeated riffs
+visually consistent.
+
+Expert is the most detailed interpretation. Hard, Medium, and Easy are derived
+from it by reducing density and simplifying the available lanes: Easy uses the
+first three colors, Medium adds the fourth, and Hard and Expert can use all five.
+That means the lower difficulties remain recognizably the same song instead of
+being four unrelated charts.
+
+### 4. Build the Clone Hero song
+
+Finally, FastChart writes `notes.chart` and `song.ini`, adds the playable audio
+plus any album or background artwork, and packages everything into one ZIP.
+Unzip it into the Clone Hero `Songs` directory, scan for songs, and it is ready
+to play.
+
+FastChart is aiming for a convincing, playable abstraction rather than a perfect
+note-for-note transcription of every instrument in a finished mix. That last
+part is genuinely difficult, but the deterministic pipeline makes each decision
+fast, inspectable, and easy to improve as the project evolves.
+
+## Architecture
+
+<p align="center">
+  <img src="assets/fastchart-architecture.png" alt="FastChart browser, CLI, shared Rust core, and output architecture" width="1200">
+</p>
 
 ## Run
 

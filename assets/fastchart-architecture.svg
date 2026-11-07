@@ -1,0 +1,217 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="800" viewBox="0 0 1400 800" role="img" aria-labelledby="title desc">
+  <title id="title">FastChart system architecture</title>
+  <desc id="desc">The browser and command line entrypoints feed a shared Rust audio, DSP, music, chart, and Clone Hero serialization core. Browser output is packaged as a ZIP, while command line output is written as a song folder. All processing remains on the local device.</desc>
+  <defs>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#ffffff" stroke-opacity=".022"/>
+    </pattern>
+    <filter id="shadow" x="-20%" y="-25%" width="140%" height="170%">
+      <feDropShadow dx="0" dy="12" stdDeviation="15" flood-color="#000" flood-opacity=".24"/>
+    </filter>
+    <marker id="head" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M1 1l7 4-7 4" fill="none" stroke="#7e8995" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      text { font-family: "Segoe UI", Arial, sans-serif; }
+      .eyebrow { fill:#ff5b35; font-size:11px; font-weight:700; letter-spacing:2.2px; }
+      .headline { fill:#f7f4ed; font-size:38px; font-weight:750; letter-spacing:-1.5px; }
+      .subhead { fill:#9ba4af; font-size:14px; }
+      .zone { fill:#0e1217; fill-opacity:.66; stroke:#39414b; stroke-width:1; stroke-dasharray:6 7; }
+      .zone-label { fill:#76818d; font-size:9px; font-weight:700; letter-spacing:1.6px; }
+      .surface { fill:#14191f; stroke:#37404a; stroke-width:1; }
+      .surface-accent { fill:#181718; stroke:#ff5b35; stroke-opacity:.75; stroke-width:1.2; }
+      .node { fill:#1a2027; stroke:#343d47; stroke-width:1; }
+      .node-hot { fill:#231b1a; stroke:#ff5b35; stroke-opacity:.65; stroke-width:1; }
+      .title { fill:#f4f1ea; font-size:16px; font-weight:700; letter-spacing:-.2px; }
+      .label { fill:#dce1e6; font-size:11px; font-weight:650; }
+      .copy { fill:#909aa6; font-size:10px; }
+      .micro { fill:#9da7b2; font-size:9px; font-weight:650; }
+      .mono { font-family:Consolas,"Courier New",monospace; }
+      .rule { stroke:#333b45; stroke-width:1; }
+      .link { fill:none; stroke:#7e8995; stroke-width:1.35; marker-end:url(#head); }
+      .link-hot { fill:none; stroke:#ff5b35; stroke-width:1.55; marker-end:url(#head); }
+      .port { fill:#0b0e12; stroke:#707b86; stroke-width:1; }
+    </style>
+  </defs>
+
+  <rect width="1400" height="800" fill="#0b0e12"/>
+  <rect width="1400" height="800" fill="url(#grid)"/>
+  <path d="M0 0h7v800H0z" fill="#ff5b35"/>
+
+  <text class="eyebrow" x="52" y="52">SYSTEM ARCHITECTURE</text>
+  <text class="headline" x="52" y="94">One core, two ways to run it</text>
+  <text class="subhead" x="52" y="124">The static browser app and native CLI share the same deterministic Rust pipeline.</text>
+
+  <g transform="translate(1202 48)">
+    <g transform="skewX(-8)">
+      <rect x="0" y="19" width="6" height="13" rx="3" fill="#ff5b35"/>
+      <rect x="10" y="9" width="6" height="23" rx="3" fill="#ff5b35"/>
+      <rect x="20" y="0" width="6" height="32" rx="3" fill="#ff5b35"/>
+      <rect x="30" y="9" width="6" height="23" rx="3" fill="#ff5b35"/>
+      <rect x="40" y="19" width="6" height="13" rx="3" fill="#ff5b35"/>
+    </g>
+    <text x="58" y="26" fill="#f7f4ed" font-size="20" font-weight="750" letter-spacing="-.8">FastChart</text>
+  </g>
+
+  <rect class="zone" x="40" y="158" width="1320" height="568" rx="18"/>
+  <rect x="61" y="147" width="124" height="22" fill="#0b0e12"/>
+  <text class="zone-label" x="72" y="162">LOCAL DEVICE</text>
+
+  <text class="zone-label" x="72" y="199">ENTRYPOINTS</text>
+  <text class="zone-label" x="348" y="199">RUNTIME BOUNDARY</text>
+  <text class="zone-label" x="638" y="199">SHARED RUST CORE</text>
+  <text class="zone-label" x="1140" y="199">DELIVERY</text>
+
+  <g filter="url(#shadow)">
+    <rect class="surface" x="70" y="222" width="230" height="182" rx="14"/>
+    <rect x="70" y="222" width="230" height="4" rx="2" fill="#ff5b35"/>
+    <text class="micro" x="90" y="254">STATIC WEB APP</text>
+    <text class="title" x="90" y="280">Browser</text>
+    <g transform="translate(90 298)">
+      <rect class="node" width="190" height="83" rx="9"/>
+      <path d="M0 23h190" class="rule"/>
+      <circle cx="13" cy="12" r="3" fill="#ff5b35"/>
+      <circle cx="24" cy="12" r="3" fill="#ffd75a"/>
+      <circle cx="35" cy="12" r="3" fill="#53d77a"/>
+      <path d="M16 49h8l4-14 7 28 7-20 8 12 8-23 8 29 7-18 8 8h12" fill="none" stroke="#ff5b35" stroke-width="1.8" stroke-linecap="round"/>
+      <path d="M113 38h58M113 49h45M113 60h52" stroke="#58636f" stroke-width="2" stroke-linecap="round"/>
+      <text class="copy mono" x="16" y="75">audio + metadata</text>
+    </g>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect class="surface" x="70" y="475" width="230" height="154" rx="14"/>
+    <text class="micro" x="90" y="507">NATIVE APP</text>
+    <text class="title" x="90" y="533">Command line</text>
+    <rect class="node" x="90" y="550" width="190" height="55" rx="8"/>
+    <circle cx="106" cy="567" r="3" fill="#53d77a"/>
+    <text class="copy mono" x="118" y="570">fastchart guide ...</text>
+    <path d="M105 586h51" stroke="#66717d" stroke-width="2" stroke-linecap="round"/>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect class="surface" x="346" y="222" width="238" height="182" rx="14"/>
+    <text class="micro" x="366" y="254">BROWSER EXECUTION</text>
+    <text class="title" x="366" y="280">Web Worker</text>
+    <rect class="node-hot" x="366" y="299" width="198" height="80" rx="9"/>
+    <rect x="382" y="315" width="52" height="22" fill="#ff5b35"/>
+    <text x="395" y="330" fill="#0b0e12" font-size="9" font-weight="800">WASM</text>
+    <text class="label mono" x="446" y="329">fastchart_generate</text>
+    <path d="M382 350h166" class="rule"/>
+    <text class="copy" x="382" y="367">Typed arrays cross a small ABI</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect class="surface" x="346" y="475" width="238" height="154" rx="14"/>
+    <text class="micro" x="366" y="507">NATIVE EXECUTION</text>
+    <text class="title" x="366" y="533">Rust process</text>
+    <rect class="node" x="366" y="550" width="198" height="55" rx="8"/>
+    <text class="label mono" x="382" y="573">FFmpeg decode</text>
+    <text class="copy" x="382" y="590">PCM samples + song metadata</text>
+  </g>
+
+  <path class="link" d="M300 313H346"/>
+  <text class="micro mono" x="311" y="302">File API</text>
+  <path class="link" d="M300 552H346"/>
+  <text class="micro mono" x="307" y="541">paths</text>
+
+  <g filter="url(#shadow)">
+    <rect class="surface-accent" x="626" y="214" width="468" height="432" rx="18"/>
+    <text class="micro" x="650" y="246" fill="#ff8062">FASTCHART WORKSPACE</text>
+    <text class="title" x="650" y="272">Reusable processing core</text>
+
+    <g transform="translate(650 296)">
+      <rect class="node" width="190" height="72" rx="9"/>
+      <circle cx="22" cy="25" r="11" fill="#ff5b35" fill-opacity=".14" stroke="#ff5b35"/>
+      <path d="M15 25h14M22 18v14" stroke="#ff5b35"/>
+      <text class="label mono" x="43" y="24">fastchart-audio</text>
+      <text class="copy" x="43" y="42">Normalize samples</text>
+      <text class="copy" x="43" y="57">Keep guide in sync</text>
+    </g>
+
+    <g transform="translate(870 296)">
+      <rect class="node-hot" width="190" height="72" rx="9"/>
+      <path d="M14 45h7l5-25 7 38 8-28 8 17 8-30 8 39 8-23 8 12h8" fill="none" stroke="#ff5b35" stroke-width="1.7" stroke-linecap="round"/>
+      <text class="label mono" x="102" y="24">fastchart-dsp</text>
+      <text class="copy" x="102" y="42">Tempo + transients</text>
+      <text class="copy" x="102" y="57">Pitch + confidence</text>
+    </g>
+
+    <g transform="translate(650 402)">
+      <rect class="node" width="190" height="72" rx="9"/>
+      <circle cx="22" cy="24" r="4" fill="#53d77a"/>
+      <circle cx="22" cy="38" r="4" fill="#ffd75a"/>
+      <circle cx="22" cy="52" r="4" fill="#4aa3ff"/>
+      <path d="M30 24h14M30 38h14M30 52h14" class="rule"/>
+      <text class="label mono" x="55" y="24">fastchart-music</text>
+      <text class="copy" x="55" y="42">SongAnalysis</text>
+      <text class="copy" x="55" y="57">Events + tempo map</text>
+    </g>
+
+    <g transform="translate(870 402)">
+      <rect class="node" width="190" height="72" rx="9"/>
+      <path d="M15 17v40M27 17v40M39 17v40M51 17v40M63 17v40" stroke="#46515d"/>
+      <circle cx="21" cy="27" r="4" fill="#53d77a"/>
+      <circle cx="33" cy="42" r="4" fill="#ff5a6f"/>
+      <circle cx="57" cy="31" r="4" fill="#4aa3ff"/>
+      <text class="label mono" x="78" y="24">chart-core</text>
+      <text class="copy" x="78" y="42">Lanes + sustains</text>
+      <text class="copy" x="78" y="57">Four difficulties</text>
+    </g>
+
+    <g transform="translate(650 508)">
+      <rect class="node" width="410" height="86" rx="9"/>
+      <path d="M19 18h42l10 10v40H19z" fill="none" stroke="#7d8792"/>
+      <path d="M28 38h34M28 48h26M28 58h30" stroke="#596470"/>
+      <text class="label mono" x="92" y="28">fastchart-clonehero</text>
+      <text class="copy" x="92" y="47">Serialize notes.chart and song.ini</text>
+      <text class="copy" x="92" y="65">Filter instruments and selected difficulties</text>
+      <path d="M307 24h82M307 58h82" stroke="#704036"/>
+      <rect x="307" y="38" width="5" height="5" fill="#ff5b35"/>
+      <text class="micro mono" x="321" y="45">TEXT OUTPUT</text>
+    </g>
+
+    <path class="link-hot" d="M840 332H870"/>
+    <path class="link" d="M965 368v18H745v16"/>
+    <path class="link" d="M840 438H870"/>
+    <path class="link" d="M965 474v18H855v16"/>
+  </g>
+
+  <path class="link-hot" d="M584 339H626"/>
+  <text class="micro mono" x="591" y="328">PCM</text>
+  <path class="link" d="M584 578h21v-246h21"/>
+  <circle class="port" cx="605" cy="578" r="4"/>
+
+  <g filter="url(#shadow)">
+    <rect class="surface" x="1134" y="222" width="196" height="182" rx="14"/>
+    <text class="micro" x="1154" y="254">BROWSER OUTPUT</text>
+    <text class="title" x="1154" y="280">ZIP packager</text>
+    <rect class="node" x="1154" y="299" width="156" height="80" rx="9"/>
+    <path d="M1170 317h34l8 8h21v33h-63z" fill="none" stroke="#ff5b35" stroke-width="1.5"/>
+    <path d="M1245 319h46M1245 331h35M1245 343h42" stroke="#66717d" stroke-width="2" stroke-linecap="round"/>
+    <text class="copy mono" x="1170" y="370">downloadable .zip</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect class="surface" x="1134" y="475" width="196" height="154" rx="14"/>
+    <text class="micro" x="1154" y="507">CLI OUTPUT</text>
+    <text class="title" x="1154" y="533">Song folder</text>
+    <rect class="node" x="1154" y="550" width="156" height="55" rx="8"/>
+    <text class="copy mono" x="1170" y="572">notes.chart</text>
+    <text class="copy mono" x="1170" y="589">song.ini + audio</text>
+  </g>
+
+  <path class="link-hot" d="M1094 551h18v-238h22"/>
+  <text class="micro mono" x="1104" y="302">JSON</text>
+  <path class="link" d="M1094 568h40"/>
+  <text class="micro mono" x="1098" y="589">files</text>
+
+  <g transform="translate(70 675)">
+    <circle cx="7" cy="7" r="4" fill="#53d77a"/>
+    <text x="22" y="11" fill="#dce1e6" font-size="11" font-weight="650">No server in the data path</text>
+    <text class="copy" x="172" y="11">Audio, metadata, analysis, and generated files stay on the user's machine.</text>
+    <path d="M1030-7h190" stroke="#343d47"/>
+    <rect x="1030" y="4" width="5" height="5" fill="#ff5b35"/>
+    <text class="micro mono" x="1044" y="11">LOCAL-FIRST BY DESIGN</text>
+  </g>
+</svg>
