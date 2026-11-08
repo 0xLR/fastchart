@@ -85,7 +85,7 @@
     <text class="title" x="90" y="533">Command line</text>
     <rect class="node" x="90" y="550" width="190" height="55" rx="8"/>
     <circle cx="106" cy="567" r="3" fill="#53d77a"/>
-    <text class="copy mono" x="118" y="570">fastchart guide ...</text>
+    <text class="copy mono" x="118" y="570">fastchart song.opus</text>
     <path d="M105 586h51" stroke="#66717d" stroke-width="2" stroke-linecap="round"/>
   </g>
 
@@ -126,7 +126,7 @@
       <path d="M15 25h14M22 18v14" stroke="#ff5b35"/>
       <text class="label mono" x="43" y="24">fastchart-audio</text>
       <text class="copy" x="43" y="42">Normalize samples</text>
-      <text class="copy" x="43" y="57">Keep guide in sync</text>
+      <text class="copy" x="43" y="57">Align optional guides</text>
     </g>
 
     <g transform="translate(870 296)">

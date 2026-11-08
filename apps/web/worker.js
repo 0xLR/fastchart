@@ -31,15 +31,10 @@ self.addEventListener("message", async ({ data }) => {
     self.postMessage({ type: "progress", stage: "analyze", percent: 34 });
     const engine = await loadFastChart();
     let samples = new Float32Array(data.samples);
-    let guitarGuide = new Float32Array(data.guitarGuide);
     const samplesPointer = engine.fastchart_alloc_f32(samples.length);
-    const guitarGuidePointer = engine.fastchart_alloc_f32(guitarGuide.length);
     new Float32Array(engine.memory.buffer, samplesPointer, samples.length).set(samples);
-    new Float32Array(engine.memory.buffer, guitarGuidePointer, guitarGuide.length).set(guitarGuide);
     const samplesLength = samples.length;
-    const guitarGuideLength = guitarGuide.length;
     samples = null;
-    guitarGuide = null;
     const title = writeString(engine, data.title);
     const artist = writeString(engine, data.artist);
     const album = writeString(engine, data.album);
@@ -53,8 +48,8 @@ self.addEventListener("message", async ({ data }) => {
       resultPointer = engine.fastchart_generate(
         samplesPointer,
         samplesLength,
-        guitarGuidePointer,
-        guitarGuideLength,
+        0,
+        0,
         data.sampleRate,
         title.pointer,
         title.length,
@@ -85,7 +80,6 @@ self.addEventListener("message", async ({ data }) => {
       engine.fastchart_free_bytes(resultPointer, resultLength);
     } finally {
       engine.fastchart_free_f32(samplesPointer, samplesLength);
-      engine.fastchart_free_f32(guitarGuidePointer, guitarGuideLength);
       releaseString(engine, title);
       releaseString(engine, artist);
       releaseString(engine, album);

@@ -3,7 +3,7 @@
 //! The exported allocation functions form a deliberately small ABI so the static
 //! web app can load the module without a JavaScript package manager or bindgen.
 
-use fastchart_audio::normalize_with_companion;
+use fastchart_audio::{normalize, normalize_with_companion};
 use fastchart_chart_core::{Difficulty, GeneratedChart, generate_full_chart};
 use fastchart_clonehero::{SongMetadata, serialize_chart, serialize_song_ini};
 use fastchart_dsp::{
@@ -107,10 +107,10 @@ pub unsafe extern "C" fn fastchart_generate(
         // keeps them alive until it returns.
         let samples = unsafe { std::slice::from_raw_parts(samples_pointer, samples_length) };
         let guitar_guide = if guitar_guide_pointer.is_null() || guitar_guide_length == 0 {
-            samples
+            None
         } else {
             // SAFETY: JavaScript keeps this allocation alive until the call returns.
-            unsafe { std::slice::from_raw_parts(guitar_guide_pointer, guitar_guide_length) }
+            Some(unsafe { std::slice::from_raw_parts(guitar_guide_pointer, guitar_guide_length) })
         };
         let title = read_string(title_pointer, title_length, "Unknown Song");
         let artist = read_string(artist_pointer, artist_length, "Unknown Artist");
@@ -158,7 +158,7 @@ fn read_string(pointer: *const u8, length: usize, fallback: &str) -> String {
 
 fn generate_json(
     input_samples: &[f32],
-    input_guitar_guide: &[f32],
+    input_guitar_guide: Option<&[f32]>,
     sample_rate: u32,
     mut metadata: SongMetadata,
     instrument_mask: u32,
@@ -175,18 +175,26 @@ fn generate_json(
         difficulty_mask
     };
     let mut samples = input_samples.to_vec();
-    let mut guitar_guide = input_guitar_guide.to_vec();
-    normalize_with_companion(&mut samples, &mut guitar_guide);
+    let mut guitar_guide = input_guitar_guide.map(<[f32]>::to_vec);
+    if let Some(guide) = &mut guitar_guide {
+        normalize_with_companion(&mut samples, guide);
+    } else {
+        normalize(&mut samples);
+    }
     let config = AnalysisConfig::default();
     let mut analysis = analyze_mono(&samples, sample_rate, config);
     if instrument_mask & GUITAR != 0 {
-        analysis.tracks.push(analyze_pitched_mono_with_guide(
-            &samples,
-            &guitar_guide,
-            sample_rate,
-            Instrument::Guitar,
-            config,
-        ));
+        analysis.tracks.push(if let Some(guide) = &guitar_guide {
+            analyze_pitched_mono_with_guide(
+                &samples,
+                guide,
+                sample_rate,
+                Instrument::Guitar,
+                config,
+            )
+        } else {
+            analyze_pitched_mono(&samples, sample_rate, Instrument::Guitar, config)
+        });
     }
     if instrument_mask & BASS != 0 {
         analysis.tracks.push(analyze_pitched_mono(
@@ -283,7 +291,7 @@ mod tests {
         let samples = vec![0.0; 4_410];
         let response = generate_json(
             &samples,
-            &samples,
+            None,
             44_100,
             SongMetadata {
                 name: "A \"title\"".into(),
@@ -310,7 +318,7 @@ mod tests {
     fn instrument_filter_removes_unselected_sections() {
         let response = generate_json(
             &[0.0; 2_205],
-            &[0.0; 2_205],
+            None,
             44_100,
             SongMetadata {
                 name: "Song".into(),

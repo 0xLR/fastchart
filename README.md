@@ -27,11 +27,12 @@ WAV, are kept for the final download. Other decodable formats are converted to
 a standard 16-bit WAV locally.
 
 FastChart averages the channels into a normalized mono signal for the main
-analysis. For guitar timing, it also builds a lightweight side-channel guide by
-subtracting the right channel from the left. Centered sounds such as lead vocals
-are often reduced in that signal, while panned or doubled guitars remain. The
-guide only answers *when did an attack happen?*; pitch still comes from the full
-mix so useful musical information is not thrown away.
+analysis. Guitar and bass timing and pitch both come from that complete mix.
+This proved more reliable than automatically subtracting the stereo channels,
+which can remove real guitar information along with centered vocals. The native
+CLI still offers an explicit guide mode for cases where a genuinely separated
+accompaniment or guitar stem is available. In that mode the guide answers *when
+did an attack happen?*, while pitch still comes from the full mix.
 
 ### 2. Listen for musical structure
 

@@ -19,31 +19,6 @@ export function mixToMono(audioBuffer) {
   return mono;
 }
 
-/**
- * Builds a lightweight guitar-onset guide by cancelling audio common to the
- * left and right channels. Lead vocals are commonly centered, while doubled
- * or panned guitars remain in this side signal. Rust still estimates pitch
- * from the full mono mix; this signal only decides when guitar attacks occur.
- */
-export function guitarOnsetGuide(audioBuffer, mono) {
-  if (audioBuffer.numberOfChannels < 2) return mono.slice();
-  const left = audioBuffer.getChannelData(0);
-  const right = audioBuffer.getChannelData(1);
-  const guide = new Float32Array(audioBuffer.length);
-  let monoEnergy = 0;
-  let guideEnergy = 0;
-  for (let index = 0; index < guide.length; index += 1) {
-    const sample = (left[index] - right[index]) * 0.5;
-    guide[index] = sample;
-    monoEnergy += mono[index] * mono[index];
-    guideEnergy += sample * sample;
-  }
-  // Dual-mono and extremely narrow recordings have no useful side channel.
-  // Falling back preserves the previous behavior for those files.
-  if (guideEnergy <= monoEnergy * 0.0001) return mono.slice();
-  return guide;
-}
-
 /** Encodes a browser AudioBuffer as stereo-or-mono 16-bit PCM WAV. */
 export function encodePcm16Wave(audioBuffer) {
   const channelCount = Math.min(audioBuffer.numberOfChannels, 2);

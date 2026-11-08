@@ -29,6 +29,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         generate_from_stems(&args[1..])?;
         return Ok(());
     }
+    if args.first().is_some_and(|arg| arg == "guide") {
+        generate_with_guitar_guide(&args[1..])?;
+        return Ok(());
+    }
     if args.first().is_some_and(|arg| arg == "compare-pitched") {
         let generated = args.get(1).ok_or(
             "usage: fastchart compare-pitched <generated.chart> <notes.mid|notes.chart> <guitar|bass>",
@@ -117,17 +121,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let output = args
         .get(1)
         .map_or_else(|| PathBuf::from("fastchart-output"), PathBuf::from);
-    let (mut samples, mut guitar_guide) = decode_mono_and_guitar_guide(input, 44_100)?;
-    normalize_with_companion(&mut samples, &mut guitar_guide);
+    let mut samples = decode_with_ffmpeg(input, 44_100)?;
+    normalize(&mut samples);
     println!(
         "Analyzing {:.1} seconds of audio...",
         samples.len() as f64 / 44_100.0
     );
     let config = AnalysisConfig::default();
     let mut analysis = analyze_mono(&samples, 44_100, config);
-    analysis.tracks.push(analyze_pitched_mono_with_guide(
+    analysis.tracks.push(analyze_pitched_mono(
         &samples,
-        &guitar_guide,
         44_100,
         Instrument::Guitar,
         config,
@@ -437,6 +440,80 @@ fn generate_from_stems(args: &[std::ffi::OsString]) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+fn generate_with_guitar_guide(
+    args: &[std::ffi::OsString],
+) -> Result<(), Box<dyn std::error::Error>> {
+    if args.len() < 3 {
+        return Err("usage: fastchart guide <audio-file> <guitar-onset-guide> <output-directory> [song-name] [artist]".into());
+    }
+    let input = Path::new(&args[0]);
+    let guide_path = Path::new(&args[1]);
+    let output = Path::new(&args[2]);
+    let mut samples = decode_with_ffmpeg(input, 44_100)?;
+    let mut guitar_guide = decode_with_ffmpeg(guide_path, 44_100)?;
+    let shared_length = samples.len().min(guitar_guide.len());
+    samples.truncate(shared_length);
+    guitar_guide.truncate(shared_length);
+    normalize_with_companion(&mut samples, &mut guitar_guide);
+    let config = AnalysisConfig::default();
+    let mut analysis = analyze_mono(&samples, 44_100, config);
+    analysis.tracks.push(analyze_pitched_mono_with_guide(
+        &samples,
+        &guitar_guide,
+        44_100,
+        Instrument::Guitar,
+        config,
+    ));
+    analysis.tracks.push(analyze_pitched_mono(
+        &samples,
+        44_100,
+        Instrument::Bass,
+        config,
+    ));
+    let chart = generate_full_chart(&analysis);
+    let name = args
+        .get(3)
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| {
+            input
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        });
+    let artist = args
+        .get(4)
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Unknown Artist".into());
+    let extension = compatible_audio_extension(input);
+    let metadata = SongMetadata {
+        name,
+        artist,
+        audio_filename: format!("song.{extension}"),
+        song_length_ms: (analysis.duration_seconds * 1000.0).round() as u64,
+        ..SongMetadata::default()
+    };
+    fs::create_dir_all(output)?;
+    fs::write(
+        output.join("notes.chart"),
+        serialize_chart(&metadata, &chart),
+    )?;
+    fs::write(
+        output.join("song.ini"),
+        serialize_song_ini(&metadata, &chart),
+    )?;
+    copy_compatible_audio(input, output, "song")?;
+    println!(
+        "Wrote guide-assisted chart with {} Expert guitar notes to {}",
+        chart
+            .guitar_tracks
+            .get(&Difficulty::Expert)
+            .map_or(0, Vec::len),
+        output.display()
+    );
+    Ok(())
+}
+
 fn extension_or<'a>(path: &'a Path, fallback: &'a str) -> &'a str {
     path.extension().and_then(OsStr::to_str).unwrap_or(fallback)
 }
@@ -633,33 +710,6 @@ fn decode_with_ffmpeg(
     decode_with_ffmpeg_channels(path, sample_rate, 1)
 }
 
-fn decode_mono_and_guitar_guide(
-    path: &Path,
-    sample_rate: u32,
-) -> Result<(Vec<f32>, Vec<f32>), Box<dyn std::error::Error>> {
-    let stereo = decode_with_ffmpeg_channels(path, sample_rate, 2)?;
-    Ok(stereo_to_mono_and_guitar_guide(&stereo))
-}
-
-fn stereo_to_mono_and_guitar_guide(stereo: &[f32]) -> (Vec<f32>, Vec<f32>) {
-    let mut mono = Vec::with_capacity(stereo.len() / 2);
-    let mut guide = Vec::with_capacity(stereo.len() / 2);
-    let mut mono_energy = 0.0_f64;
-    let mut guide_energy = 0.0_f64;
-    for frame in stereo.chunks_exact(2) {
-        let center = (frame[0] + frame[1]) * 0.5;
-        let side = (frame[0] - frame[1]) * 0.5;
-        mono.push(center);
-        guide.push(side);
-        mono_energy += f64::from(center * center);
-        guide_energy += f64::from(side * side);
-    }
-    if guide_energy <= mono_energy * 0.0001 {
-        guide.clone_from(&mono);
-    }
-    (mono, guide)
-}
-
 fn decode_with_ffmpeg_channels(
     path: &Path,
     sample_rate: u32,
@@ -702,9 +752,7 @@ fn decode_with_ffmpeg_channels(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DrumEvent, compatible_audio_extension, match_drum_events, stereo_to_mono_and_guitar_guide,
-    };
+    use super::{DrumEvent, compatible_audio_extension, match_drum_events};
     use std::path::Path;
 
     #[test]
@@ -741,13 +789,5 @@ mod tests {
         assert_eq!(compatible_audio_extension(Path::new("song.flac")), "wav");
         assert_eq!(compatible_audio_extension(Path::new("song.m4a")), "wav");
         assert_eq!(compatible_audio_extension(Path::new("song.opus")), "opus");
-    }
-
-    #[test]
-    fn centered_audio_is_removed_from_guitar_guide_when_side_energy_exists() {
-        let (mono, guide) =
-            stereo_to_mono_and_guitar_guide(&[0.5, 0.5, -0.5, -0.5, 0.75, 0.25, -0.75, -0.25]);
-        assert_eq!(mono, [0.5, -0.5, 0.5, -0.5]);
-        assert_eq!(guide, [0.0, 0.0, 0.25, -0.25]);
     }
 }
