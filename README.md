@@ -145,10 +145,16 @@ Then open `http://127.0.0.1:4173`. Building requires Rust's
 
 FastChart publishes the contents of `apps/web/dist` to the conventional
 `gh-pages` branch. Commit your local changes, then run this from the repository
-root:
+root on Windows:
 
 ```powershell
 ./scripts/publish-github-pages.ps1
+```
+
+On macOS or Linux:
+
+```bash
+./scripts/publish-github-pages.sh
 ```
 
 The helper builds the static app, runs the WASM smoke test, and updates only the
