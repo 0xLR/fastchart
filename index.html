@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Turn a song into a playable Clone Hero chart entirely in your browser."
+    />
+    <title>FastChart — Audio to Clone Hero chart</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#" aria-label="FastChart home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        <span>FastChart</span>
+      </a>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">AUTOMATIC CHART GENERATION</p>
+          <h1 id="hero-title">Your song.<br /><em>Ready to play.</em></h1>
+          <p class="lede">
+            Drop in an audio file and FastChart finds the tempo, transients, and pitched parts to
+            build a full Clone Hero chart—drums, guitar, and bass included.
+          </p>
+          <div class="trust-row" aria-label="FastChart features">
+            <span>Local processing</span><span>All difficulties</span><span>Clone Hero ready</span>
+          </div>
+        </div>
+
+        <section class="chart-card" aria-label="Chart generator">
+          <div class="card-head">
+            <div>
+              <span class="step-label">01 / ADD A SONG</span>
+              <h2>Make your chart</h2>
+            </div>
+            <div class="lane-dots" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+
+          <label id="drop-zone" class="drop-zone" tabindex="0" role="button" for="audio-file">
+            <input id="audio-file" type="file" accept="audio/*,.wav,.mp3,.ogg,.opus,.flac,.m4a" />
+            <div class="upload-disc" aria-hidden="true"><span>↑</span></div>
+            <strong>Drop your audio here</strong>
+            <span>or choose a file</span>
+            <small>WAV, MP3, OGG, OPUS, FLAC, or M4A</small>
+          </label>
+
+          <div id="file-card" class="file-card" hidden>
+            <div class="file-icon" aria-hidden="true">♫</div>
+            <div class="file-copy"><strong id="file-name"></strong><span id="file-size"></span></div>
+            <button id="remove-file" class="icon-button" type="button" aria-label="Remove selected file">×</button>
+          </div>
+
+          <div id="song-fields" class="song-fields" hidden>
+            <label>Song title<input id="song-title" type="text" autocomplete="off" /></label>
+            <label>Artist<input id="song-artist" type="text" autocomplete="off" placeholder="Unknown Artist" /></label>
+          </div>
+
+          <details id="optional-metadata" class="metadata-panel" hidden>
+            <summary>
+              <span>Optional song details</span>
+              <small>Metadata &amp; artwork</small>
+            </summary>
+            <div class="metadata-grid">
+              <label>Album<input id="song-album" type="text" autocomplete="off" /></label>
+              <label>Genre<input id="song-genre" type="text" autocomplete="off" placeholder="Rock, Funk, Metal…" /></label>
+              <label>Year<input id="song-year" type="number" inputmode="numeric" min="1000" max="9999" placeholder="2026" /></label>
+              <label>Album track #<input id="album-track" type="number" inputmode="numeric" min="1" max="999" placeholder="1" /></label>
+              <label class="wide-field">Charter<input id="song-charter" type="text" autocomplete="off" value="FastChart" /></label>
+            </div>
+            <div class="image-fields">
+              <label>
+                <span>Album / track art</span>
+                <input id="album-art" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" />
+                <small>Optional PNG or JPG, exported as <code>album.*</code></small>
+              </label>
+              <label>
+                <span>Background image</span>
+                <input id="background-art" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" />
+                <small>Optional PNG or JPG, exported as <code>background.*</code></small>
+              </label>
+            </div>
+            <p class="metadata-note">Artwork is packaged locally with your chart and never uploaded.</p>
+          </details>
+
+          <fieldset id="instruments" class="options" disabled>
+            <legend>Instruments</legend>
+            <label><input type="checkbox" value="1" checked /><span class="check"></span>Drums</label>
+            <label><input type="checkbox" value="2" checked /><span class="check"></span>Guitar</label>
+            <label><input type="checkbox" value="4" checked /><span class="check"></span>Bass</label>
+          </fieldset>
+
+          <fieldset id="difficulties" class="options compact" disabled>
+            <legend>Difficulties</legend>
+            <label><input type="checkbox" value="1" checked /><span class="check"></span>Easy</label>
+            <label><input type="checkbox" value="2" checked /><span class="check"></span>Medium</label>
+            <label><input type="checkbox" value="4" checked /><span class="check"></span>Hard</label>
+            <label><input type="checkbox" value="8" checked /><span class="check"></span>Expert</label>
+          </fieldset>
+
+          <button id="generate" class="primary-button" type="button" disabled>
+            <span>Generate chart</span><span aria-hidden="true">→</span>
+          </button>
+          <p id="form-error" class="form-error" role="alert"></p>
+        </section>
+      </section>
+
+      <section id="progress-panel" class="progress-panel" hidden aria-live="polite">
+        <div class="pulse-orbit" aria-hidden="true"><span></span></div>
+        <div class="progress-copy">
+          <p class="eyebrow">FASTCHART IS LISTENING</p>
+          <h2 id="progress-title">Decoding your audio…</h2>
+          <p id="progress-detail">Preparing a clean mono signal for the analysis engine.</p>
+          <div class="progress-track"><i id="progress-bar"></i></div>
+          <ol class="progress-steps">
+            <li id="stage-decode" class="active">Decode</li>
+            <li id="stage-analyze">Analyze</li>
+            <li id="stage-chart">Chart</li>
+            <li id="stage-pack">Package</li>
+          </ol>
+        </div>
+        <button id="cancel" class="secondary-button" type="button">Cancel</button>
+      </section>
+
+      <section id="result-panel" class="result-panel" hidden aria-live="polite">
+        <div class="result-title">
+          <span class="success-mark" aria-hidden="true">✓</span>
+          <div><p class="eyebrow">CHART COMPLETE</p><h2>Ready for your setlist.</h2></div>
+        </div>
+        <div class="stats">
+          <div><span>Tempo</span><strong id="stat-bpm">—</strong><small>BPM</small></div>
+          <div><span>Drum notes</span><strong id="stat-drums">—</strong></div>
+          <div><span>Guitar notes</span><strong id="stat-guitar">—</strong></div>
+          <div><span>Bass notes</span><strong id="stat-bass">—</strong></div>
+        </div>
+        <div class="result-actions">
+          <button id="download" class="primary-button" type="button"><span>Download Clone Hero ZIP</span><span>↓</span></button>
+          <button id="start-over" class="secondary-button" type="button">Chart another song</button>
+        </div>
+        <p class="result-note">Unzip into your Clone Hero <code>Songs</code> folder, scan songs, and play.</p>
+      </section>
+    </main>
+
+    <footer><span>FastChart</span><span>Audio never leaves your browser.</span></footer>
+    <script>
+      if (window.location.protocol === "file:") {
+        document.querySelector("#form-error").textContent =
+          "FastChart must be opened through its local server. Run npm run serve in apps/web, then open http://127.0.0.1:4173.";
+      }
+    </script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
