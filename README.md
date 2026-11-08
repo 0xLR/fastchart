@@ -140,3 +140,18 @@ npm run serve
 
 Then open `http://127.0.0.1:4173`. Building requires Rust's
 `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`).
+
+## Publish to GitHub Pages
+
+FastChart publishes the contents of `apps/web/dist` to the conventional
+`gh-pages` branch. Commit your local changes, then run this from the repository
+root:
+
+```powershell
+./scripts/publish-github-pages.ps1
+```
+
+The helper builds the static app, runs the WASM smoke test, and updates only the
+published branch through a temporary checkout. In the GitHub repository, open
+**Settings > Pages**, choose **Deploy from a branch**, then select `gh-pages`
+and `/ (root)`. That GitHub setting only needs to be configured once.
